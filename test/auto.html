@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<!-- Browser UI smoke test. Serve repo root, open /test/auto.html headless,
+     grep console output for AUTOTEST lines. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Xenkor UI autotest</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header id="topbar">
+    <span id="title">⬡ XENKOR</span>
+    <span id="stats"></span>
+    <span class="spacer"></span>
+    <button id="end-turn">End Turn ⏵</button>
+    <button id="surrender" class="secondary">Surrender</button>
+    <button id="new-game" class="secondary">New Game</button>
+  </header>
+  <main>
+    <div id="map-wrap"><canvas id="map"></canvas></div>
+    <aside id="sidebar">
+      <section id="players"></section>
+      <section id="actions"></section>
+      <section id="hexinfo"></section>
+      <section id="log"></section>
+    </aside>
+  </main>
+  <div id="toast" class="hidden"></div>
+  <div id="overlay" class="hidden"></div>
+
+  <script type="module">
+    import { boot } from '../js/ui.js';
+    import { toPixel, key, neighbors, hexDistance } from '../js/hex.js';
+    import { getOffset, HEX_SIZE } from '../js/render.js';
+    import { ownUnits, makeUnit, UNITS } from '../js/rules.js';
+
+    let failures = 0;
+    const ok = (cond, msg) => {
+      console.log(`AUTOTEST ${cond ? 'PASS' : 'FAIL'}: ${msg}`);
+      if (!cond) failures++;
+    };
+    window.onerror = (msg) => { console.log('AUTOTEST FAIL: uncaught ' + msg); failures++; };
+
+    function cellClient(q, r) {
+      const canvas = document.getElementById('map');
+      const rect = canvas.getBoundingClientRect();
+      const { offsetX, offsetY } = getOffset();
+      const { x, y } = toPixel(q, r, HEX_SIZE);
+      return {
+        clientX: rect.left + ((x + offsetX) * rect.width) / canvas.width,
+        clientY: rect.top + ((y + offsetY) * rect.height) / canvas.height,
+      };
+    }
+
+    function fire(type, pos) {
+      document.getElementById('map').dispatchEvent(
+        new MouseEvent(type, { bubbles: true, button: 0, ...pos }));
+    }
+
+    function clickCell(q, r) {
+      const pos = cellClient(q, r);
+      fire('mousedown', pos);
+      fire('mouseup', pos);
+    }
+
+    function dragCell(q1, r1, q2, r2) {
+      const a = cellClient(q1, r1), b = cellClient(q2, r2);
+      fire('mousedown', a);
+      fire('mousemove', { clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2 });
+      fire('mousemove', b);
+      fire('mouseup', b);
+    }
+
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    async function run() {
+      boot();
+      const X = window.__xenkor;
+      const game = X.game;
+      ok(game.cells.size > 300, 'map generated');
+
+      // Select the human start hex.
+      const start = [...game.cells.values()].find(c => ownUnits(c, 0).length);
+      ok(!!start, 'human has units');
+      clickCell(start.q, start.r);
+      ok(X.view.sel === key(start.q, start.r), 'click selects start hex');
+      ok(X.view.reach && X.view.reach.size > 0, 'reachable hexes computed');
+
+      // Clicking another cell must only select it — never move units.
+      const dest = neighbors(game.cells, start).find(n => n.terrain !== 'sea');
+      ok(!!dest, 'adjacent land destination exists');
+      clickCell(dest.q, dest.r);
+      ok(ownUnits(start, 0).length === 3, 'click does NOT move units');
+      ok(X.view.sel === key(dest.q, dest.r), 'click re-selects instead');
+
+      // Drag the stack to move it.
+      dragCell(start.q, start.r, dest.q, dest.r);
+      ok(ownUnits(dest, 0).length === 3, 'drag moves the stack');
+      ok(dest.owner === 0, 'destination captured');
+      ok(X.view.sel === key(dest.q, dest.r), 'selection follows the stack');
+
+      // Build an upgrade, then replace it (one at a time, transitions allowed).
+      game.players[0].money = 500;
+      clickCell(dest.q, dest.r);
+      const farmBtn = document.querySelector('[data-build="farm"]');
+      if (dest.terrain !== 'desert') {
+        ok(farmBtn && !farmBtn.disabled, 'farm button enabled');
+        farmBtn.click();
+        ok(dest.upgrade === 'farm', 'farm built as the cell upgrade');
+        ok(document.querySelector('[data-build="farm"]').disabled, 'same upgrade again blocked');
+      }
+      const abBtn = document.querySelector('[data-build="airbase"]');
+      ok(abBtn && !abBtn.disabled, 'upgrade transition offered');
+      abBtn.click();
+      ok(dest.upgrade === 'airbase', 'farm replaced by air base');
+      const fortBtn = document.querySelector('[data-build="fort"]');
+      ok(fortBtn && !fortBtn.disabled, 'fortify independent of upgrade');
+      fortBtn.click();
+      ok(dest.fort === true, 'fortification built');
+      const recruitBtn = document.querySelector('[data-recruit="basic"]');
+      ok(recruitBtn && !recruitBtn.disabled, 'recruit button enabled');
+      recruitBtn.click();
+      ok(dest.units.length === 4, 'infantry recruited');
+
+      // Air strike by drag, at range > 1.
+      const planeBtn = document.querySelector('[data-recruit="aircraft"]');
+      ok(planeBtn && !planeBtn.disabled, 'aircraft recruitable at air base');
+      planeBtn.click();
+      const plane = dest.units.find(u => u.type === 'aircraft');
+      ok(!!plane, 'aircraft recruited');
+      plane.actions = UNITS.aircraft.actions;
+      const strikeTarget = [...game.cells.values()].find(c => {
+        const d = hexDistance(dest, c);
+        return c.terrain !== 'sea' && d >= 3 && d <= 6 && !c.units.length && c.owner === null;
+      });
+      ok(!!strikeTarget, 'distant strike target found');
+      strikeTarget.owner = 1;
+      strikeTarget.units = [makeUnit('basic', 1)];
+      clickCell(dest.q, dest.r);
+      ok(X.view.attackable.has(key(strikeTarget.q, strikeTarget.r)),
+        'enemy at range 6 shown attackable');
+      dragCell(dest.q, dest.r, strikeTarget.q, strikeTarget.r);
+      ok(plane.actions < UNITS.aircraft.actions || !dest.units.includes(plane),
+        'drag launched the air strike');
+
+      // End turn: all four NPCs play (animated), then control returns.
+      const turnBefore = game.turn;
+      document.getElementById('end-turn').click();
+      for (let i = 0; i < 600 && X.busy; i++) await sleep(100);
+      ok(!X.busy, 'NPC turns completed');
+      ok(game.turn === turnBefore + 1, 'turn advanced');
+      ok(game.players.some(p => !p.isHuman && p.money !== 25), 'NPCs acted');
+
+      // A couple more turns to let combat/AI churn under the real UI loop.
+      for (let t = 0; t < 2; t++) {
+        document.getElementById('end-turn').click();
+        for (let i = 0; i < 600 && X.busy; i++) await sleep(100);
+      }
+      ok(game.turn === turnBefore + 3, 'three turns played through UI');
+
+      console.log(failures ? `AUTOTEST DONE: ${failures} FAILURES` : 'AUTOTEST DONE: ALL PASS');
+    }
+    run();
+  </script>
+</body>
+</html>
