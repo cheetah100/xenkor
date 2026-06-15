@@ -12,6 +12,8 @@
     <span id="title">⬡ XENKOR</span>
     <span id="stats"></span>
     <span class="spacer"></span>
+    <button id="toggle-fx" class="secondary">🎬 FX on</button>
+    <button id="toggle-sound" class="secondary">🔊 Sound</button>
     <button id="end-turn">End Turn ⏵</button>
     <button id="surrender" class="secondary">Surrender</button>
     <button id="new-game" class="secondary">New Game</button>
@@ -72,12 +74,21 @@
     }
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const waitIdle = async () => { for (let i = 0; i < 600 && window.__xenkor.busy; i++) await sleep(50); };
 
     async function run() {
       boot();
       const X = window.__xenkor;
       const game = X.game;
       ok(game.cells.size > 300, 'map generated');
+
+      // Toggles flip state.
+      ok(X.fx.animations === true && X.fx.sound === true, 'fx defaults on');
+      document.getElementById('toggle-fx').click();
+      ok(X.fx.animations === false, 'FX toggle works');
+      document.getElementById('toggle-sound').click();
+      ok(X.fx.sound === false, 'sound toggle works');
+      // Keep animations off for the rest so the test runs fast & deterministic.
 
       // Select the human start hex.
       const start = [...game.cells.values()].find(c => ownUnits(c, 0).length);
@@ -140,6 +151,7 @@
       ok(X.view.attackable.has(key(strikeTarget.q, strikeTarget.r)),
         'enemy at range 6 shown attackable');
       dragCell(dest.q, dest.r, strikeTarget.q, strikeTarget.r);
+      await waitIdle(); // human attacks resolve through an (async) combat animation
       ok(plane.actions < UNITS.aircraft.actions || !dest.units.includes(plane),
         'drag launched the air strike');
 

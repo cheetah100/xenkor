@@ -282,12 +282,14 @@ function pickDefender(cell, p) {
   return null;
 }
 
-// One successful hit lands on the hex: damage, then destroy or capture.
-function applyHit(game, to, p) {
+// One successful hit lands on the hex: damage, then destroy/sink or capture.
+// Boarding (flag-swap) only happens in adjacent surface combat; air strikes
+// and shore bombardment can only sink, never capture.
+function applyHit(game, to, p, canCapture) {
   const d = pickDefender(to, p);
   d.hp--;
   if (d.hp > 0) return 'hit';
-  if (UNITS[d.type].capturable) {
+  if (canCapture && UNITS[d.type].capturable) {
     d.owner = p;
     d.hp = UNITS[d.type].hp;
     d.actions = 0;
@@ -296,8 +298,10 @@ function applyHit(game, to, p) {
   }
   const owner = d.owner;
   to.units.splice(to.units.indexOf(d), 1);
+  const sankCargo = d.cargo?.length;
   checkElimination(game, owner);
-  return `destroyed ${UNITS[d.type].name}`;
+  return `${UNITS[d.type].capturable ? 'sank' : 'destroyed'} ${UNITS[d.type].name}` +
+    (sankCargo ? ' and its cargo' : '');
 }
 
 // Every unit of p in `from` with an action attacks `to` once (coordinated assault).
@@ -321,7 +325,8 @@ export function attackHex(game, from, to, p) {
     const roll = 1 + Math.floor(game.rng() * 6);
     const total = roll + UNITS[a.type].atk;
     if (total > defTotal) {
-      const outcome = applyHit(game, to, p);
+      // Boarding is only possible in same-domain surface combat, not bombardment.
+      const outcome = applyHit(game, to, p, !bombard);
       results.rolls.push({ roll, total, defTotal, success: true, outcome, attacker: a.type });
     } else {
       a.hp--;
@@ -335,7 +340,17 @@ export function attackHex(game, from, to, p) {
   }
   const wins = results.rolls.filter(r => r.success).length;
   log(game, `${game.players[p].name} attacked: ${wins}/${results.rolls.length} hits.`);
+  recordFx(game, {
+    kind: bombard ? 'bombard' : 'attack',
+    from: key(from.q, from.r), to: key(to.q, to.r), attacker: p,
+    shots: results.rolls.length, hits: wins,
+  });
   return results;
+}
+
+// Combat events for the UI to animate. Cleared by the renderer as it consumes them.
+export function recordFx(game, ev) {
+  (game.fx ??= []).push(ev);
 }
 
 // Can this stack attack that hex at all (ground, bombardment or air strike)?
@@ -344,7 +359,12 @@ export function canAttack(game, from, to, p) {
   if (hexDistance(from, to) <= AIR_RANGE &&
       aircraftAt(from, p).some(a => a.actions > 0)) return true;
   if (!isAdjacent(from, to)) return false;
-  if (domainOf(from) === domainOf(to)) return true;
+  // Same-domain surface combat needs a unit that can actually fight — fishing
+  // vessels and transports (attack 0) only earn money, they never attack.
+  if (domainOf(from) === domainOf(to)) {
+    return ownUnits(from, p).some(u =>
+      u.actions > 0 && UNITS[u.type].atk > 0 && UNITS[u.type].domain !== 'air');
+  }
   return domainOf(from) === 'sea' && domainOf(to) === 'land' &&
     ownUnits(from, p).some(u => u.type === 'warship' && u.actions > 0);
 }
@@ -384,7 +404,8 @@ export function airStrike(game, from, to, p) {
     const roll = 1 + Math.floor(game.rng() * 6);
     const total = roll + UNITS.aircraft.atk;
     if (total > defTotal) {
-      const outcome = applyHit(game, to, p);
+      // Aircraft sink ships; they can't board or capture.
+      const outcome = applyHit(game, to, p, false);
       results.rolls.push({ roll, total, defTotal, success: true, outcome, attacker: 'aircraft' });
     } else {
       a.hp--;
@@ -398,6 +419,10 @@ export function airStrike(game, from, to, p) {
   }
   const wins = results.rolls.filter(r => r.success).length;
   log(game, `${game.players[p].name} launched an air strike: ${wins}/${results.rolls.length} hits.`);
+  recordFx(game, {
+    kind: 'air', from: key(from.q, from.r), to: key(to.q, to.r), attacker: p,
+    shots: results.rolls.length, hits: wins, sorties: planes.length,
+  });
   return results;
 }
 

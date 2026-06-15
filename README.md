@@ -29,8 +29,11 @@ npm start            # python3 -m http.server 8000
   selected. Mechanised units need a factory; naval units need a port;
   aircraft need an air base.
 - **End Turn** lets the four NPCs play out their moves at watchable speed.
-  Last power holding territory wins. You can also surrender and choose which
-  NPC inherits your army.
+  Combat is animated — the camera zooms in on each fight, aircraft fly to their
+  targets, hits flash and shake the screen, with synthesized battle sounds.
+  Toggle **🎬 FX** and **🔊 Sound** in the header (FX off = sound only and
+  instant turns). Last power holding territory wins. You can also surrender and
+  choose which NPC inherits your army.
 
 ## House rules (changes from the original spec)
 
@@ -56,8 +59,12 @@ npm start            # python3 -m http.server 8000
 | [js/mapgen.js](js/mapgen.js) | Procedural continents, land bridges, terrain |
 | [js/ai.js](js/ai.js) | NPC economy, offensives, amphibious invasions (step generator for animation) |
 | [js/game.js](js/game.js) | Game construction, seeded RNG, turn start |
-| [js/render.js](js/render.js) | Canvas drawing |
+| [js/render.js](js/render.js) | Canvas drawing, camera zoom, combat effects |
+| [js/anim.js](js/anim.js) | Combat animation sequencing + WebAudio sounds |
 | [js/ui.js](js/ui.js) | Drag-and-drop input, panels, turn sequencing |
+
+Combat is decoupled from animation: `rules.js` records each fight as an event
+in `game.fx` (from/to/kind/hits); the UI drains that queue and plays each one.
 
 ## Tests
 
@@ -65,5 +72,7 @@ npm start            # python3 -m http.server 8000
 npm test             # headless rules/AI simulation (full AI-vs-AI games)
 ```
 
-`test/auto.html` is a browser UI smoke test: serve the repo, open
-`/test/auto.html`, and check the console for `AUTOTEST` lines.
+Browser tests — serve the repo and open the page, then read the console:
+
+- `test/auto.html` — UI smoke test (drag-to-move/attack, build, recruit, turns); `AUTOTEST` lines.
+- `test/anim.html` — combat animation checks (zoom, plane flight, blast, shake); `ANIM` lines.

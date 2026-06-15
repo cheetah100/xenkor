@@ -161,6 +161,38 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   }
 }
 
+// --- Regression: air strikes SINK ships, never capture them ---
+// (Bug: enemy aircraft boarded a captured fishing boat, flipping it back each turn.)
+{
+  const game = createGame(9);
+  const land = [...game.cells.values()].find(c => c.terrain !== 'sea');
+  land.owner = 0;
+  land.upgrade = 'airbase';
+  const sea = [...game.cells.values()].find(c =>
+    c.terrain === 'sea' && hexDistance(land, c) > 0 && hexDistance(land, c) <= AIR_RANGE);
+  const fish = makeUnit('fishing', 1);
+  sea.units = [fish];
+  const plane = makeUnit('aircraft', 0);
+  plane.actions = UNITS.aircraft.actions;
+  land.units.push(plane);
+  const res = airStrike(game, land, sea, 0);
+  check(!res.error, `air strike on ship errored: ${res.error}`);
+  check(!sea.units.includes(fish), 'air strike must sink the fishing boat');
+  check(sea.units.every(u => u.owner !== 0), 'air strike must not capture the fishing boat');
+
+  // A warship boarding the same boat in adjacent surface combat DOES capture it.
+  const seaAdj = neighbors(game.cells, sea).find(n => n.terrain === 'sea');
+  if (seaAdj) {
+    const fish2 = makeUnit('fishing', 1);
+    sea.units = [fish2];
+    const ws = makeUnit('warship', 0);
+    ws.actions = 5;
+    seaAdj.units = [ws];
+    for (let i = 0; i < 10 && fish2.owner === 1; i++) { ws.actions = 5; attackHex(game, seaAdj, sea, 0); }
+    check(fish2.owner === 0, 'warship boarding should capture the fishing boat');
+  }
+}
+
 // --- Mechanics: carrier as mobile air base ---
 {
   const game = createGame(8);
@@ -195,6 +227,25 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   extra.actions = 2;
   shore.units = [extra];
   check(airMove(game, shore, sea, 0) !== null, 'carrier deck capacity enforced');
+}
+
+// --- Combat event feed (drives UI animations) ---
+{
+  const game = createGame(13);
+  game.fx = [];
+  const land = [...game.cells.values()].find(c => c.terrain !== 'sea');
+  land.upgrade = 'airbase';
+  land.owner = 0;
+  const seaTarget = [...game.cells.values()].find(c =>
+    c.terrain === 'sea' && hexDistance(land, c) > 0 && hexDistance(land, c) <= AIR_RANGE);
+  seaTarget.units = [makeUnit('warship', 1)];
+  const plane = makeUnit('aircraft', 0);
+  plane.actions = UNITS.aircraft.actions;
+  land.units.push(plane);
+  airStrike(game, land, seaTarget, 0);
+  const ev = game.fx.at(-1);
+  check(ev && ev.kind === 'air' && ev.from && ev.to && typeof ev.hits === 'number',
+    'air strike records an animatable event (from/to/kind/hits)');
 }
 
 // Full games.

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><link rel="stylesheet" href="../style.css"></head>
+<body>
+  <header id="topbar"><span id="title">X</span><span id="stats"></span><span class="spacer"></span>
+    <button id="toggle-fx" class="secondary">FX</button><button id="toggle-sound" class="secondary">S</button>
+    <button id="end-turn">End</button><button id="surrender" class="secondary"></button><button id="new-game" class="secondary"></button></header>
+  <main><div id="map-wrap"><canvas id="map"></canvas></div>
+    <aside id="sidebar"><section id="players"></section><section id="actions"></section>
+      <section id="hexinfo"></section><section id="log"></section></aside></main>
+  <div id="toast" class="hidden"></div><div id="overlay" class="hidden"></div>
+  <script type="module">
+    import { boot } from '../js/ui.js';
+    import { playCombat, fx } from '../js/anim.js';
+    import { hexDistance, key } from '../js/hex.js';
+    import { makeUnit } from '../js/rules.js';
+
+    let failures = 0;
+    const ok = (c, m) => { console.log(`ANIM ${c?'PASS':'FAIL'}: ${m}`); if (!c) failures++; };
+    window.onerror = m => { console.log('ANIM FAIL: uncaught ' + m); failures++; };
+
+    async function run() {
+      boot();
+      const X = window.__xenkor, game = X.game, view = X.view;
+      fx.sound = false;
+      const land = [...game.cells.values()].find(c => c.terrain !== 'sea' && c.owner === 0);
+      land.upgrade = 'airbase';
+      for (let i=0;i<3;i++){ const p=makeUnit('aircraft',0); p.actions=2; land.units.push(p); }
+      const target = [...game.cells.values()].find(c => { const d=hexDistance(land,c); return c.terrain==='sea' && d>=3 && d<=6; });
+      ok(!!target, 'distant sea target found');
+      target.units = [makeUnit('warship',1)];
+      view.sel = key(land.q, land.r);
+
+      // Spy on the camera/effects by sampling them during the animation.
+      let maxScale = 1, sawPlane = false, sawBlast = false, sawShake = false;
+      const canvas = document.getElementById('map');
+      const realDraw = canvas.getContext('2d');
+      const timer = setInterval(() => {
+        if (view.camera) maxScale = Math.max(maxScale, view.camera.scale);
+        if (view.camera?.shake > 0) sawShake = true;
+        for (const e of view.effects || []) { if (e.type==='plane') sawPlane = true; if (e.type==='blast') sawBlast = true; }
+      }, 8);
+
+      const ev = { kind:'air', from:key(land.q,land.r), to:key(target.q,target.r), attacker:0, shots:3, hits:2, sorties:3 };
+      await playCombat(canvas, game, view, ev, 1);
+      clearInterval(timer);
+
+      ok(maxScale > 1.5, 'camera zoomed in on combat (scale '+maxScale.toFixed(2)+')');
+      ok(sawPlane, 'aircraft sprites flew to the target');
+      ok(sawBlast, 'impact blast shown');
+      ok(sawShake, 'screen shook on hit');
+      ok(view.camera === null, 'camera reset after combat');
+      ok((view.effects||[]).length === 0, 'effects cleared after combat');
+
+      // Ground attack should use tracers, not planes.
+      let sawTracer = false;
+      const adj = [...game.cells.values()].find(c => c.terrain!=='sea' && c.owner===0 && hexDistance(land,c)===1) ||
+                  [...game.cells.values()].find(c => c.terrain!=='sea' && hexDistance(land,c)===1);
+      if (adj) {
+        adj.owner = 1; adj.units = [makeUnit('basic',1)];
+        const t2 = setInterval(() => { for (const e of view.effects||[]) if (e.type==='tracer') sawTracer = true; }, 8);
+        await playCombat(canvas, game, view, { kind:'attack', from:key(land.q,land.r), to:key(adj.q,adj.r), attacker:0, shots:2, hits:1 }, 1);
+        clearInterval(t2);
+        ok(sawTracer, 'ground attack drew tracer fire');
+      }
+
+      // With animations ON, an NPC turn must still complete (not hang).
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      fx.animations = true;
+      const before = game.turn;
+      document.getElementById('end-turn').click();
+      for (let i = 0; i < 800 && X.busy; i++) await sleep(50);
+      ok(!X.busy, 'NPC turn finished with animations on');
+      ok(game.turn === before + 1, 'turn advanced with animations on');
+
+      console.log(failures ? `ANIM DONE: ${failures} FAILURES` : 'ANIM DONE: ALL PASS');
+    }
+    run();
+  </script>
+</body></html>

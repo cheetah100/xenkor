@@ -34,6 +34,7 @@ button {
 button:hover:not(:disabled) { filter: brightness(1.15); }
 button:disabled { opacity: 0.4; cursor: default; }
 button.secondary { background: #34495e; }
+button.secondary.off { background: #222d38; color: #7e96ab; }
 
 main {
   flex: 1;

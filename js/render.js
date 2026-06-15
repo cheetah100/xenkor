@@ -71,10 +71,22 @@ function mix(hexA, hexB, t) {
 
 export function draw(canvas, game, view) {
   const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#1b2a3a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+
+  // Optional camera (used by the combat zoom): scale about a focus point,
+  // with a small shake offset during impacts.
+  const cam = view.camera;
+  if (cam) {
+    const sx = cam.shake ? (Math.random() - 0.5) * cam.shake : 0;
+    const sy = cam.shake ? (Math.random() - 0.5) * cam.shake : 0;
+    ctx.translate(canvas.width / 2 + sx, canvas.height / 2 + sy);
+    ctx.scale(cam.scale, cam.scale);
+    ctx.translate(-cam.x, -cam.y);
+  }
 
   for (const cell of game.cells.values()) {
     const { x: cx, y: cy } = cellCenter(cell);
@@ -175,5 +187,68 @@ export function draw(canvas, game, view) {
     ctx.lineTo(x2 - 12 * Math.cos(ang + 0.4), y2 - 12 * Math.sin(ang + 0.4));
     ctx.closePath();
     ctx.fill();
+  }
+
+  // Combat effects, drawn in world space (so the camera zoom applies to them).
+  for (const fx of view.effects ?? []) drawEffect(ctx, fx);
+}
+
+// A transient combat visual. `t` runs 0→1 over its life.
+function drawEffect(ctx, fx) {
+  const t = fx.t;
+  if (fx.type === 'tracer') {
+    // Volley of muzzle lines from attacker to target.
+    ctx.globalAlpha = 1 - t;
+    ctx.strokeStyle = fx.hit ? '#ffd54f' : '#ffffff';
+    ctx.lineWidth = 2;
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const j = (i / n + t) % 1;
+      const x = fx.x1 + (fx.x2 - fx.x1) * j;
+      const y = fx.y1 + (fx.y2 - fx.y1) * j;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (fx.x2 - fx.x1) * 0.06, y + (fx.y2 - fx.y1) * 0.06);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  } else if (fx.type === 'plane') {
+    // A plane flying along its path; leaves a faint contrail.
+    const x = fx.x1 + (fx.x2 - fx.x1) * t;
+    const y = fx.y1 + (fx.y2 - fx.y1) * t;
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    ctx.moveTo(fx.x1, fx.y1);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.atan2(fx.y2 - fx.y1, fx.x2 - fx.x1) + Math.PI / 2);
+    ctx.font = '18px sans-serif';
+    ctx.fillText('✈️', 0, 0);
+    ctx.restore();
+  } else if (fx.type === 'blast') {
+    // Expanding shockwave ring + flash for a hit.
+    const r = 6 + t * 26;
+    ctx.globalAlpha = (1 - t) * 0.9;
+    ctx.fillStyle = fx.hit ? '#ff7043' : '#90a4ae';
+    ctx.beginPath();
+    ctx.arc(fx.x, fx.y, r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = fx.hit ? '#ffca28' : '#cfd8dc';
+    ctx.lineWidth = 3 * (1 - t);
+    ctx.beginPath();
+    ctx.arc(fx.x, fx.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    if (fx.hit && t < 0.5) {
+      ctx.font = '20px sans-serif';
+      ctx.fillText('💥', fx.x, fx.y);
+    }
   }
 }

@@ -13,6 +13,7 @@ import {
 } from './rules.js';
 import { aiTurnGen } from './ai.js';
 import { initCanvas, pickHex, eventToCanvas, draw } from './render.js';
+import { playCombat, fx } from './anim.js';
 import { createGame } from './game.js';
 
 const $ = id => document.getElementById(id);
@@ -34,13 +35,34 @@ export function boot() {
   $('end-turn').addEventListener('click', endTurn);
   $('surrender').addEventListener('click', surrenderDialog);
   $('new-game').addEventListener('click', newGame);
+  $('toggle-fx').addEventListener('click', () => { fx.animations = !fx.animations; syncToggles(); });
+  $('toggle-sound').addEventListener('click', () => { fx.sound = !fx.sound; syncToggles(); });
+  syncToggles();
   refresh();
   // Debug/test hook.
   window.__xenkor = {
     get game() { return game; },
     get view() { return view; },
     get busy() { return busy; },
+    fx,
   };
+}
+
+function syncToggles() {
+  $('toggle-fx').textContent = fx.animations ? '🎬 FX on' : '🎬 FX off';
+  $('toggle-fx').classList.toggle('off', !fx.animations);
+  $('toggle-sound').textContent = fx.sound ? '🔊 Sound' : '🔇 Muted';
+  $('toggle-sound').classList.toggle('off', !fx.sound);
+}
+
+// Drain queued combat events, playing each as an animation. Backlogged turns
+// speed up so a big battle doesn't drag.
+async function flushCombat() {
+  while (game.fx.length) {
+    const ev = game.fx.shift();
+    const speed = game.fx.length > 6 ? 3 : game.fx.length > 2 ? 1.8 : 1;
+    await playCombat($('map'), game, view, ev, speed);
+  }
 }
 
 function newGame() {
@@ -52,7 +74,8 @@ function newGame() {
 }
 
 function deselect() {
-  view = { sel: null, reach: null, parents: null, attackable: null, drag: null };
+  view = { sel: null, reach: null, parents: null, attackable: null, drag: null,
+    camera: null, effects: null };
 }
 
 // Where can the stack on `cell` go / strike? Attack range includes any hex
@@ -105,6 +128,7 @@ function onMouseMove(ev) {
 }
 
 function onMouseUp(ev) {
+  if (busy) return;
   if (view.drag?.active) {
     const fromK = view.drag.from;
     const toK = pickHex($('map'), game, ev);
@@ -115,7 +139,7 @@ function onMouseUp(ev) {
     return;
   }
   pendingDrag = null;
-  if (busy || game.over) return;
+  if (game.over) return;
   const k = pickHex($('map'), game, ev);
   if (k) select(k); else deselect();
   refresh();
@@ -129,7 +153,7 @@ function cancelDrag() {
   }
 }
 
-function resolveDrop(fromK, toK, maps) {
+async function resolveDrop(fromK, toK, maps) {
   if (!toK || toK === fromK) { select(fromK); refresh(); return; }
   const from = game.cells.get(fromK);
   const to = game.cells.get(toK);
@@ -138,8 +162,12 @@ function resolveDrop(fromK, toK, maps) {
   // Hostile target: every eligible arm fires (ground, bombardment, air).
   if (maps.attackable.has(toK)) {
     const res = attackAll(game, from, to, HUMAN);
-    if (res.error) toast(res.error);
-    else logRolls(res);
+    if (res.error) { toast(res.error); select(fromK); refresh(); return; }
+    logRolls(res);
+    busy = true;
+    refresh();
+    await flushCombat();   // watch your own attack play out too
+    busy = false;
     afterAction(fromK);
     return;
   }
@@ -220,9 +248,13 @@ async function endTurn() {
     for (const _ of aiTurnGen(game, p)) {
       steps++;
       refresh();
+      if (game.fx.length) {
+        await flushCombat();          // watch the attack play out
+      } else {
+        // Human speed for the first moves, then accelerate so big turns stay snappy.
+        await sleep(steps < 40 ? 110 : 25);
+      }
       if (checkGameOver()) { finishTurnLoop(); return; }
-      // Human speed for the first moves, then accelerate so big turns stay snappy.
-      await sleep(steps < 40 ? 120 : 30);
     }
     if (checkGameOver()) { finishTurnLoop(); return; }
   }

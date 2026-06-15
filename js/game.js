@@ -26,7 +26,7 @@ export function createGame(seed = (Math.random() * 2 ** 31) | 0) {
   const { cells, starts } = generateMap(rng);
 
   const players = ROSTER.map((r, id) => ({ ...r, id, money: 25, alive: true }));
-  const game = { seed, rng, cells, players, current: 0, turn: 1, log: [], over: false };
+  const game = { seed, rng, cells, players, current: 0, turn: 1, log: [], over: false, fx: [] };
 
   starts.forEach((cell, i) => {
     cell.owner = i;
