@@ -166,4 +166,74 @@ main {
 .modal button { margin: 4px; }
 #cede-buttons { margin-bottom: 12px; }
 
+/* Help / field manual modal */
+.modal.help {
+  position: relative;
+  text-align: left;
+  width: min(720px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 26px;
+}
+.modal.help h1 { font-size: 1.4rem; text-align: center; }
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: #aabbcc;
+  font-size: 1.1rem;
+  cursor: pointer;
+  margin: 0;
+  padding: 4px 8px;
+}
+.modal-close:hover { color: #fff; }
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #2c3e50;
+  margin-bottom: 14px;
+}
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #aabbcc;
+  padding: 8px 14px;
+  margin: 0;
+  cursor: pointer;
+  border-radius: 0;
+}
+.tab:hover { color: #fff; }
+.tab.active { color: #fff; border-bottom-color: #42a5f5; }
+.tab-body { overflow-y: auto; padding-right: 6px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+.tab-panel p { color: #c8d6e2; margin-bottom: 12px; line-height: 1.5; }
+.tab-panel h4 { margin: 16px 0 8px; }
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+.help-card {
+  background: #0f1923;
+  border: 1px solid #2c3e50;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.help-card-head { font-size: 1.02rem; margin-bottom: 4px; }
+.help-card p { margin: 0; color: #c8d6e2; font-size: 0.9rem; line-height: 1.45; }
+.help-stats { color: #7d93a6; font-size: 0.82rem; margin-bottom: 6px; }
+.help-card .dim, .tab-panel .dim { color: #7d93a6; font-size: 0.82rem; }
+.help-table { border-collapse: collapse; width: 100%; }
+.help-table th, .help-table td {
+  border: 1px solid #2c3e50;
+  padding: 5px 10px;
+  text-align: left;
+}
+.help-table th { color: #aabbcc; font-weight: 600; }
+
 .hidden { display: none !important; }

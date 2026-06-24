@@ -33,8 +33,9 @@ npm start            # python3 -m http.server 8000
   Combat is animated — the camera zooms in on each fight, aircraft fly to their
   targets, hits flash and shake the screen, with synthesized battle sounds.
   Toggle **🎬 FX** and **🔊 Sound** in the header (FX off = sound only and
-  instant turns). Last power holding territory wins. You can also surrender and
-  choose which NPC inherits your army.
+  instant turns). The last power still holding a production building (barracks,
+  factory, port, or air base) wins — capture or raze all of an enemy's and they
+  fall. You can also surrender and choose which NPC inherits your army.
 
 ## Rules worth knowing
 
@@ -42,8 +43,10 @@ npm start            # python3 -m http.server 8000
   farmland/mountains, 0 on desert) — enough to avoid being locked out, but the
   real economy is farms (+3/+1) and factories (+5) built on top.
 - **One upgrade per cell**: farm | barracks | factory | port | air base. A
-  cell's upgrade can be replaced later by paying the new upgrade's full cost.
-  Fortification is separate and stacks with the upgrade.
+  **farm** can be upgraded into any other improvement (paying its full cost);
+  every other improvement is terminal and must be **razed** before the cell can
+  change — so you can't accidentally overwrite a barracks. Fortification is
+  separate and stacks with the upgrade.
 - **Barracks** (cost 30) recruit infantry, the way a factory is required for
   mechs. Each player's capital starts with one. Ports also muster infantry
   (marines), so a coastal assault force can be raised at the water's edge.
@@ -69,6 +72,15 @@ npm start            # python3 -m http.server 8000
   hex within one of it, firing free each sortie to knock 1 hp off the plane
   (warship ~50%, SAM ~67%). SAMs have no ground attack and are fragile, so screen
   them — but stack anti-air and an air wing gets shredded.
+- **Defeat = no production buildings**: a player is knocked out once their every
+  barracks, factory, port, and air base has been captured or razed. Holding only
+  farms or empty land won't keep them in. Last power with a production building
+  standing wins.
+- **Conquest spoils**: take an enemy's last production building and their surviving
+  units, cargo, land and farms all **defect to you** on the spot — an instant
+  windfall. (Inherited units have already used their turn, so they act from your
+  next turn on.) Only a player finished off with no conqueror — e.g. razing their
+  own last building — sees their remnants scatter to neutral instead.
 
 ## Code layout
 

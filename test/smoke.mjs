@@ -5,6 +5,7 @@ import { aiTurn } from '../js/ai.js';
 import {
   startTurn, winner, cellCount, playerIncome, makeUnit, attackHex,
   airStrike, airMove, aircraftAt, build, attackAll, razeOwn, canRazeOwn, canRecruit,
+  checkElimination, militaryBuildingCount,
   MAX_UNITS_PER_HEX, UNITS, UPGRADES, AIR_RANGE,
 } from '../js/rules.js';
 import { neighbors, hexDistance } from '../js/hex.js';
@@ -121,12 +122,16 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   const game = createGame(11);
   const cell = [...game.cells.values()].find(c => c.terrain === 'farmland');
   cell.owner = 0;
+  cell.upgrade = null;
   game.players[0].money = 200;
   check(build(game, cell, 'farm', 0) === null, 'farm built');
   check(build(game, cell, 'farm', 0) !== null, 'same upgrade twice rejected');
   check(build(game, cell, 'factory', 0) === null, 'farm upgraded to factory');
   check(cell.upgrade === 'factory', 'upgrade replaced');
   check(game.players[0].money === 200 - 10 - 50, 'paid full cost of each');
+  // A non-farm improvement is terminal: it must be razed before changing.
+  check(build(game, cell, 'barracks', 0) !== null, 'factory cannot be upgraded in place');
+  check(cell.upgrade === 'factory', 'blocked upgrade left the factory intact');
 }
 
 // --- Mechanics: scorched earth (raze your own improvement) ---
@@ -144,6 +149,49 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   // Can't use it on someone else's land.
   cell.upgrade = 'farm'; cell.owner = 1;
   check(canRazeOwn(game, cell, 0) === 'not your land', 'cannot self-raze enemy land');
+}
+
+// --- Mechanics: defeat is the loss of every production building ---
+{
+  const game = createGame(7);
+  const free = [...game.cells.values()].filter(c => c.terrain !== 'sea' && c.owner === null);
+  // Give player 1 a lone barracks plus a farm with a garrison; nothing else.
+  for (const c of game.cells.values()) if (c.owner === 1) { c.owner = null; c.upgrade = null; }
+  const barracks = free[0], farm = free[1];
+  barracks.owner = 1; barracks.upgrade = 'barracks'; barracks.units = [];
+  farm.owner = 1; farm.upgrade = 'farm'; farm.units = [makeUnit('basic', 1)];
+  game.players[1].alive = true;
+
+  check(militaryBuildingCount(game, 1) === 1, 'only production buildings are counted (farm ignored)');
+  checkElimination(game, 1);
+  check(game.players[1].alive, 'still in the game while a barracks stands');
+
+  // No conqueror passed (e.g. a self-raze): the remnants scatter.
+  barracks.owner = null;
+  checkElimination(game, 1);
+  check(!game.players[1].alive, 'eliminated once every production building is gone');
+  check(farm.owner === null, "ownerless defeat leaves leftover land neutral");
+  check(farm.units.length === 0, "ownerless defeat removes the forces");
+}
+
+// --- Mechanics: conquering the last building inherits land and forces ---
+{
+  const game = createGame(7);
+  const free = [...game.cells.values()].filter(c => c.terrain !== 'sea' && c.owner === null);
+  for (const c of game.cells.values()) if (c.owner === 1) { c.owner = null; c.upgrade = null; }
+  const barracks = free[0], farm = free[1];
+  barracks.owner = 1; barracks.upgrade = 'barracks'; barracks.units = [];
+  const survivor = makeUnit('mech', 1); survivor.actions = 5;
+  farm.owner = 1; farm.upgrade = 'farm'; farm.units = [survivor];
+  game.players[1].alive = true;
+
+  // Player 0 takes the last barracks, then we resolve player 1's elimination.
+  barracks.owner = 0;
+  checkElimination(game, 1, 0);
+  check(!game.players[1].alive, 'losing the last building still eliminates');
+  check(farm.owner === 0, "conqueror inherits the fallen power's land");
+  check(survivor.owner === 0, "conqueror inherits the fallen power's units");
+  check(survivor.actions === 0, 'inherited units cannot act again this turn');
 }
 
 // --- Mechanics: mech and air strikes raze improvements (units still standing) ---

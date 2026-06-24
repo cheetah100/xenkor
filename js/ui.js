@@ -4,11 +4,11 @@
 
 import { key, isAdjacent } from './hex.js';
 import {
-  UNITS, UPGRADES, FORT, TERRAIN,
+  UNITS, UPGRADES, FORT, TERRAIN, AIR_RANGE, MAX_UNITS_PER_HEX,
   reachable, pathTo, moveStack, attackAll, canAttack, build, canBuild, razeOwn, canRazeOwn,
   recruit, canRecruit, embark, disembark, transportSpace, cargoCount,
   airMove, aircraftAt,
-  ownUnits, playerIncome, cellIncome, cellCount, domainOf,
+  ownUnits, playerIncome, cellIncome, militaryBuildingCount, domainOf,
   startTurn, winner, surrender,
 } from './rules.js';
 import { aiTurnGen } from './ai.js';
@@ -56,6 +56,7 @@ export function boot() {
   $('end-turn').addEventListener('click', endTurn);
   $('surrender').addEventListener('click', surrenderDialog);
   $('new-game').addEventListener('click', newGame);
+  $('help').addEventListener('click', openHelp);
   $('toggle-fx').addEventListener('click', () => { fx.animations = !fx.animations; syncToggles(); });
   $('toggle-sound').addEventListener('click', () => { fx.sound = !fx.sound; syncToggles(); });
   initTooltips();
@@ -372,6 +373,134 @@ function surrenderDialog() {
   }
 }
 
+// ---------- help / manual ----------
+
+// One stat-and-blurb card per unit, built straight from the UNITS table so the
+// manual can never drift from the actual rules.
+function helpUnitCard(type) {
+  const u = UNITS[type];
+  const domainLabel = { land: 'Land', sea: 'Sea', air: 'Air' }[u.domain];
+  const stats = [`Cost ${u.cost}`, `${u.actions} actions`, `${u.hp} HP`];
+  if (u.atk) stats.push(`${u.atk} attack`);
+  stats.push(`${u.def} defense`);
+  if (u.aa) stats.push(`anti-air ${u.aa}`);
+  if (u.capacity) stats.push(`carries ${u.capacity}`);
+  if (u.capturable) stats.push('capturable');
+  return `<div class="help-card">
+      <div class="help-card-head">${u.emoji} <b>${u.name}</b> <span class="dim">${domainLabel}</span></div>
+      <div class="help-stats">${stats.join(' · ')}</div>
+      <p>${UNIT_TIPS[type]}</p>
+    </div>`;
+}
+
+function helpBuildCard(what, cost, tip) {
+  return `<div class="help-card">
+      <div class="help-card-head"><b>${what}</b> <span class="dim">Cost ${cost}</span></div>
+      <p>${tip}</p>
+    </div>`;
+}
+
+function helpPanels() {
+  const play = `
+    <p><b>Goal.</b> Be the last power left with a production building. A rival is
+      eliminated the moment their every <b>barracks, factory, port and air base</b>
+      is captured or razed — farms and bare land won't save them. Take their last
+      building and their surviving units, land and farms <b>defect to you</b> on the
+      spot (the inherited units can't act again until your next turn).</p>
+    <p><b>Turns.</b> You and four AI powers take turns. Each of your military units
+      gets a pool of <b>actions</b> each turn, spent on movement or attacks in any
+      mix; they refresh at the start of your turn. A hex holds up to ${MAX_UNITS_PER_HEX} units.</p>
+    <p><b>Economy.</b> Income arrives every turn from the land you own plus its
+      improvements. Bare land trickles; <b>farms</b> and <b>factories</b> are the
+      real economy. Spend it on buildings and units from a selected hex.</p>
+    <p><b>Movement.</b> Moving into a hex costs 1 action — but entering a
+      <b>mountain costs 2</b>. Selecting a unit highlights every hex it can still
+      reach this turn, accounting for that cost. Walk infantry onto an enemy hex to
+      <b>capture</b> its assets intact.</p>
+    <p><b>Upgrades.</b> A <b>farm</b> can be upgraded into any other building; every
+      other improvement is permanent unless you <b>raze</b> it first, so you can't
+      fat-finger a barracks into a farm.</p>`;
+
+  const units = '<div class="help-grid">' +
+    Object.keys(UNITS).map(helpUnitCard).join('') + '</div>';
+
+  const build = '<div class="help-grid">' +
+    Object.entries(UPGRADES).map(([k, u]) => helpBuildCard(`${u.emoji} ${u.name}`, u.cost, BUILD_TIPS[k])).join('') +
+    helpBuildCard('🧱 Fortification', FORT.cost, BUILD_TIPS.fort) +
+    '</div>' +
+    '<h4>Terrain</h4><table class="help-table"><tr><th>Terrain</th><th>Base income</th><th>Defense</th></tr>' +
+    Object.entries(TERRAIN).map(([name, t]) =>
+      `<tr><td>${name[0].toUpperCase() + name.slice(1)}</td><td>${t.income}</td><td>${t.defense}</td></tr>`).join('') +
+    '</table>';
+
+  const combat = `
+    <p><b>Resolving a hit.</b> Each attacker rolls 1d6, adds its attack, and beats
+      the hex's defense (terrain + fortification + the best defender) to land a hit.
+      Several units can pile onto one hex in a coordinated assault.</p>
+    <p><b>Hit allocation.</b> Hits soak into the stack in a fixed order so warships
+      screen a fleet: warship → carrier → mech → infantry → SAM → aircraft →
+      transport. Each hit is 1 HP.</p>
+    <p><b>Capture vs. raze.</b> Infantry take assets and grounded aircraft
+      <b>intact</b>. <b>Mechanised units and aircraft raze</b> a hex's improvement
+      outright instead — denying an economy without holding the ground. Fortifications
+      are only ever captured, never razed.</p>
+    <p><b>Air power.</b> Aircraft strike any hex within <b>range ${AIR_RANGE}</b> of their
+      base or carrier — they don't crawl hex by hex — and missed strikes cost them HP
+      to flak. <b>Anti-air</b> (warships at sea, SAM batteries on land) fires free at
+      any plane striking within one hex.</p>
+    <p><b>Sea & landings.</b> Warships bombard adjacent shores but never hold land.
+      Transports ferry land units: embark from an adjacent coast, disembark onto an
+      adjacent undefended one. A lost escort leaves transports easy prey.</p>`;
+
+  return { play, units, build, combat };
+}
+
+function closeHelp() { $('overlay').classList.add('hidden'); }
+function helpBackdropHandler(e) {
+  if (e.target === $('overlay') && $('overlay').querySelector('.modal.help')) closeHelp();
+}
+function helpKeyHandler(e) {
+  if (e.key === 'Escape' && $('overlay').querySelector('.modal.help')) closeHelp();
+}
+
+function openHelp() {
+  const ov = $('overlay');
+  const p = helpPanels();
+  const tabs = [
+    ['play', 'How to Play'], ['units', 'Units'],
+    ['build', 'Buildings'], ['combat', 'Combat'],
+  ];
+  ov.classList.remove('hidden');
+  ov.innerHTML = `
+    <div class="modal help">
+      <button class="modal-close" id="help-close" title="Close">✕</button>
+      <h1>⬡ Xenkor — Field Manual</h1>
+      <div class="tabs" id="help-tabs">
+        ${tabs.map(([id, label], i) =>
+          `<button class="tab${i === 0 ? ' active' : ''}" data-tab="${id}">${label}</button>`).join('')}
+      </div>
+      <div class="tab-body">
+        ${tabs.map(([id], i) =>
+          `<div class="tab-panel${i === 0 ? ' active' : ''}" data-panel="${id}">${p[id]}</div>`).join('')}
+      </div>
+    </div>`;
+
+  $('help-close').addEventListener('click', closeHelp);
+  // Dismiss on backdrop click / Escape. These handlers are stable references
+  // (so they never stack up on the shared overlay) and guard on .modal.help
+  // so they can't dismiss a game-over or surrender modal shown later.
+  ov.addEventListener('click', helpBackdropHandler);
+  document.addEventListener('keydown', helpKeyHandler);
+  for (const btn of ov.querySelectorAll('#help-tabs .tab')) {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.tab;
+      for (const t of ov.querySelectorAll('#help-tabs .tab')) t.classList.toggle('active', t === btn);
+      for (const panel of ov.querySelectorAll('.tab-panel'))
+        panel.classList.toggle('active', panel.dataset.panel === id);
+    });
+  }
+}
+
 // ---------- panels ----------
 
 function refresh() {
@@ -388,11 +517,12 @@ function refresh() {
 
 function renderPlayers() {
   $('players').innerHTML = '<h3>Powers</h3>' + game.players.map(p => {
-    const cells = cellCount(game, p.id);
+    const buildings = militaryBuildingCount(game, p.id);
     const cls = p.alive ? '' : ' class="dead"';
     const turnMark = busy && game.current === p.id ? ' ◀ playing' : '';
+    const label = buildings === 1 ? '1 building' : `${buildings} buildings`;
     return `<div${cls}><span class="dot" style="background:${p.color}"></span>` +
-      `${p.name} — ${p.alive ? cells + ' hexes' : 'eliminated'}${turnMark}</div>`;
+      `${p.name} — ${p.alive ? label : 'eliminated'}${turnMark}</div>`;
   }).join('');
 }
 
@@ -473,11 +603,20 @@ function renderHexInfo() {
   if (tags.length) html += `<p>${tags.join(' · ')}</p>`;
 
   if (cell.units.length) {
-    html += '<ul class="units">' + cell.units.map(u => {
-      const d = UNITS[u.type];
-      const cargo = u.cargo?.length ? ` (cargo: ${u.cargo.map(c => UNITS[c.type].emoji).join('')})` : '';
-      return `<li><span class="dot" style="background:${game.players[u.owner].color}"></span>` +
-        `${d.emoji} ${d.name} · ${u.hp}/${d.hp} hp · ${u.actions} act${cargo}</li>`;
+    // Collapse identical units into one line per owner+type, with a count.
+    const groups = new Map();
+    for (const u of cell.units) {
+      const k = `${u.owner}:${u.type}`;
+      let g = groups.get(k);
+      if (!g) { g = { owner: u.owner, type: u.type, count: 0, cargo: [] }; groups.set(k, g); }
+      g.count++;
+      if (u.cargo) g.cargo.push(...u.cargo);
+    }
+    html += '<ul class="units">' + [...groups.values()].map(g => {
+      const d = UNITS[g.type];
+      const cargo = g.cargo.length ? ` (cargo: ${g.cargo.map(c => UNITS[c.type].emoji).join('')})` : '';
+      return `<li><span class="dot" style="background:${game.players[g.owner].color}"></span>` +
+        `${d.emoji} ${d.name} ×${g.count}${cargo}</li>`;
     }).join('') + '</ul>';
   }
   box.innerHTML = html;

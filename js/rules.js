@@ -135,6 +135,11 @@ export function canBuild(game, cell, what, p) {
   }
   if (pl.money < UPGRADES[what].cost) return 'not enough money';
   if (cell.upgrade === what) return 'already built';
+  // Only a farm (or empty land) can be upgraded in place; any other improvement
+  // must be razed first, so you can't accidentally overwrite a barracks/factory.
+  if (cell.upgrade && cell.upgrade !== 'farm') {
+    return `raze the ${UPGRADES[cell.upgrade].name.toLowerCase()} first`;
+  }
   if (what === 'farm' && cell.terrain === 'desert') return 'no farms on desert';
   if (what === 'port' && !isCoastal(game, cell)) return 'must be coastal';
   return null;
@@ -173,6 +178,7 @@ export function razeOwn(game, cell, p) {
   const razed = cell.upgrade;
   cell.upgrade = null;
   log(game, `${game.players[p].name} razed their own ${UPGRADES[razed].name.toLowerCase()}.`);
+  checkElimination(game, p);
   return null;
 }
 
@@ -237,11 +243,17 @@ export function captureCell(game, cell, p) {
   if (prev !== null) {
     log(game, `${game.players[p].name} captured a hex from ${game.players[prev].name}` +
       (stuff.length ? ` with ${stuff.join(', ')}` : '') + '.');
-    checkElimination(game, prev);
+    checkElimination(game, prev, p);
   }
 }
 
-// BFS of cells a stack in `from` can reach. Returns {dists, parents}.
+// Movement-point cost to enter a cell. Mountains cost double.
+export function moveCost(cell) {
+  return cell.terrain === 'mountains' ? 2 : 1;
+}
+
+// Dijkstra over cells a stack in `from` can reach. Returns {dists, parents}.
+// Entering a mountain costs 2 movement points, every other terrain costs 1.
 export function reachable(game, from, p) {
   const dists = new Map(), parents = new Map();
   const dom = domainOf(from);
@@ -250,21 +262,23 @@ export function reachable(game, from, p) {
   const maxSteps = Math.max(...movers.map(u => u.actions));
   const fromKey = key(from.q, from.r);
   dists.set(fromKey, 0);
-  let frontier = [from];
-  for (let d = 1; d <= maxSteps && frontier.length; d++) {
-    const next = [];
-    for (const cell of frontier) {
-      for (const n of neighbors(game.cells, cell)) {
-        const k = key(n.q, n.r);
-        if (dists.has(k)) continue;
-        if (domainOf(n) !== dom) continue;
-        if (blockingUnits(n, p).length) continue;
-        dists.set(k, d);
-        parents.set(k, key(cell.q, cell.r));
-        next.push(n);
-      }
+  // Non-uniform step cost means a plain BFS can't guarantee shortest paths, so
+  // relax frontier cells until no cheaper route is found (queue stays tiny).
+  const queue = [from];
+  while (queue.length) {
+    const cell = queue.shift();
+    const base = dists.get(key(cell.q, cell.r));
+    for (const n of neighbors(game.cells, cell)) {
+      if (domainOf(n) !== dom) continue;
+      if (blockingUnits(n, p).length) continue;
+      const k = key(n.q, n.r);
+      const nd = base + moveCost(n);
+      if (nd > maxSteps) continue;
+      if (dists.has(k) && dists.get(k) <= nd) continue;
+      dists.set(k, nd);
+      parents.set(k, key(cell.q, cell.r));
+      queue.push(n);
     }
-    frontier = next;
   }
   dists.delete(fromKey);
   return { dists, parents };
@@ -284,7 +298,8 @@ export function pathTo(parents, fromKey, toKey) {
 export function moveStack(game, from, path, p) {
   const steps = path.length;
   const dom = domainOf(from);
-  let movers = ownUnits(from, p).filter(u => u.actions >= steps && UNITS[u.type].domain === dom);
+  const cost = path.reduce((sum, k) => sum + moveCost(game.cells.get(k)), 0);
+  let movers = ownUnits(from, p).filter(u => u.actions >= cost && UNITS[u.type].domain === dom);
   const dest = game.cells.get(path[steps - 1]);
   const room = MAX_UNITS_PER_HEX - dest.units.length;
   if (room <= 0) return 'destination is full';
@@ -292,7 +307,7 @@ export function moveStack(game, from, path, p) {
   if (!movers.length) return 'no units can move that far';
   for (const u of movers) {
     from.units.splice(from.units.indexOf(u), 1);
-    u.actions -= steps;
+    u.actions -= cost;
   }
   for (const k of path) {
     const cell = game.cells.get(k);
@@ -323,6 +338,9 @@ function applyHit(game, to, p, canCapture, canRaze) {
     const razed = to.upgrade;
     to.upgrade = null;
     log(game, `${game.players[p].name} razed a ${UPGRADES[razed].name.toLowerCase()}.`);
+    // Razing the hex's last production building wipes the owner out, same as
+    // capture — and the attacker inherits their remaining land and forces.
+    checkElimination(game, to.owner, p);
     return `razed ${UPGRADES[razed].name}`;
   }
   const d = pickDefender(to, p);
@@ -338,7 +356,7 @@ function applyHit(game, to, p, canCapture, canRaze) {
   const owner = d.owner;
   to.units.splice(to.units.indexOf(d), 1);
   const sankCargo = d.cargo?.length;
-  checkElimination(game, owner);
+  checkElimination(game, owner, p);
   return `${UNITS[d.type].capturable ? 'sank' : 'destroyed'} ${UNITS[d.type].name}` +
     (sankCargo ? ' and its cargo' : '');
 }
@@ -601,16 +619,43 @@ export function disembark(game, sea, land, p) {
 
 // ---------- Elimination / victory / surrender ----------
 
-export function checkElimination(game, p) {
+// Production buildings whose loss decides the game. Farms (pure economy) and bare
+// land don't count: a player is finished once every one of these is captured or razed.
+export const MILITARY_BUILDINGS = ['barracks', 'factory', 'port', 'airbase'];
+
+export function militaryBuildingCount(game, p) {
+  let n = 0;
+  for (const cell of game.cells.values()) {
+    if (cell.owner === p && MILITARY_BUILDINGS.includes(cell.upgrade)) n++;
+  }
+  return n;
+}
+
+// `by` is the player who took the last production building, if any. They inherit
+// the fallen power's remaining land and forces; with no conqueror (e.g. a player
+// razing their own last building) the remnants simply scatter.
+export function checkElimination(game, p, by = null) {
   if (p === null || p === undefined) return;
   const pl = game.players[p];
-  if (!pl.alive || cellCount(game, p) > 0) return;
+  if (!pl.alive || militaryBuildingCount(game, p) > 0) return;
   pl.alive = false;
+  const heir = (by !== null && by !== undefined && by !== p && game.players[by].alive) ? by : null;
   for (const cell of game.cells.values()) {
-    cell.units = cell.units.filter(u => u.owner !== p);
-    for (const u of cell.units) if (u.cargo) u.cargo = u.cargo.filter(c => c.owner !== p);
+    if (cell.owner === p) cell.owner = heir;        // heir === null => neutral land
+    if (heir === null) {
+      cell.units = cell.units.filter(u => u.owner !== p);
+      for (const u of cell.units) if (u.cargo) u.cargo = u.cargo.filter(c => c.owner !== p);
+    } else {
+      // Defectors change flags where they stand; they can't act again this turn.
+      for (const u of cell.units) {
+        if (u.owner === p) { u.owner = heir; u.actions = 0; }
+        for (const c of u.cargo ?? []) if (c.owner === p) { c.owner = heir; c.actions = 0; }
+      }
+    }
   }
-  log(game, `☠️ ${pl.name} has been eliminated!`);
+  log(game, heir === null
+    ? `☠️ ${pl.name} has been eliminated!`
+    : `☠️ ${pl.name} has fallen — their remaining land and forces defect to ${game.players[heir].name}!`);
 }
 
 export function winner(game) {

@@ -71,8 +71,12 @@ Static assets are built on land hexes and can be **captured** by enemy military 
 
 ### One Upgrade Per Cell
 A land hex holds **at most one upgrade**: a farm, barracks, factory, port, or air
-base. An upgrade can be **replaced** later by paying the new upgrade's full cost
-(the old one is discarded). A **fortification** is separate and stacks with the upgrade.
+base. A **farm** is the only upgradeable improvement: it can be replaced by any
+other upgrade later (paying the new upgrade's full cost; the old farm is
+discarded). Every other improvement is **terminal** — to change a barracks,
+factory, port, or air base you must **raze** it first, which guards against
+accidentally overwriting a military building. A **fortification** is separate and
+stacks with the upgrade.
 
 ### Farms
 - Built on farmland or mountain hexes only (not desert)
@@ -194,6 +198,8 @@ Combat is resolved with dice and modifiers:
 ### Actions
 Each turn, military units spend actions on **movement** or **attacks** in any combination (see the unit tables for actions per turn). A unit's actions refresh at the start of its owner's turn.
 
+Moving into most hexes costs **1 action**, but entering a **mountain** hex costs **2** — the rough terrain that makes mountains so defensible also slows advances through them. Reachable-move highlighting accounts for this double cost.
+
 ### Hit Allocation
 A hit landed on a hex is absorbed in a fixed order so warships screen the fleet:
 **warship → carrier → mechanised → infantry → aircraft → transport.**
@@ -282,7 +288,9 @@ carriers) before targeting transports.
 ## Win / Loss Conditions
 
 ### Elimination
-- A player who controls **zero cells** is eliminated; their remaining units are removed
+- A player is eliminated once they hold **no production buildings** — that is, every **barracks, factory, port, and air base** they owned has been **captured or razed**. Farms and bare land do not stave off defeat; without a production building a player can no longer field forces and is finished.
+- **Conquest spoils:** whoever takes that last production building **inherits the fallen power's remaining land and forces** — every surviving unit (and its cargo) defects to the conqueror where it stands, and all the leftover land and farms change to their flag. Inherited units have already spent their turn, so they can't act again until the conqueror's next turn. This gives the victor an immediate windfall instead of letting the spoils evaporate.
+- If a player is finished off with **no conqueror** (for example, by razing their own last building), there is no one to inherit: their remaining units scatter and their land falls **neutral**.
 
 ### Surrender
 - A player may **surrender early** before being fully eliminated
@@ -290,7 +298,7 @@ carriers) before targeting transports.
 - The surrendering player's land becomes unowned (contested) — it must be physically occupied by the recipient
 
 ### Victory
-- Last player with cells on the board wins
+- The last player still holding a production building wins
 
 ---
 
