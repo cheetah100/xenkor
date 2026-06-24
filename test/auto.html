@@ -28,6 +28,7 @@
     </aside>
   </main>
   <div id="toast" class="hidden"></div>
+  <div id="tooltip" class="hidden"></div>
   <div id="overlay" class="hidden"></div>
 
   <script type="module">
@@ -128,10 +129,33 @@
       ok(fortBtn && !fortBtn.disabled, 'fortify independent of upgrade');
       fortBtn.click();
       ok(dest.fort === true, 'fortification built');
+      // Infantry now needs a barracks, the way mechs need a factory.
+      ok(document.querySelector('[data-recruit="basic"]').disabled,
+        'infantry blocked without a barracks');
+      clickCell(start.q, start.r);
+      document.querySelector('[data-build="barracks"]').click();
+      ok(start.upgrade === 'barracks', 'barracks built');
       const recruitBtn = document.querySelector('[data-recruit="basic"]');
-      ok(recruitBtn && !recruitBtn.disabled, 'recruit button enabled');
+      ok(recruitBtn && !recruitBtn.disabled, 'infantry recruitable at a barracks');
       recruitBtn.click();
-      ok(dest.units.length === 4, 'infantry recruited');
+      ok(start.units.length === 1, 'infantry recruited at the barracks');
+      // Scorched earth: raze your own improvement (needs a unit on the hex).
+      const razeBtn = document.querySelector('[data-raze]');
+      ok(razeBtn && !razeBtn.disabled, 'raze enabled on your garrisoned improvement');
+      razeBtn.click();
+      ok(start.upgrade === null, 'own improvement razed');
+      document.querySelector('[data-build="barracks"]').click(); // rebuild for later steps
+      clickCell(dest.q, dest.r);
+
+      // Hover tooltips describe each purchase option.
+      const tipBtn = document.querySelector('#actions .bbtn[data-tip]');
+      ok(!!tipBtn, 'an enabled action button carries a hover tip');
+      const tipEl = document.getElementById('tooltip');
+      tipBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      ok(!tipEl.classList.contains('hidden') && tipEl.textContent.length > 0,
+        'tooltip shows on hover');
+      tipBtn.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+      ok(tipEl.classList.contains('hidden'), 'tooltip hides on mouseout');
 
       // Air strike by drag, at range > 1.
       const planeBtn = document.querySelector('[data-recruit="aircraft"]');

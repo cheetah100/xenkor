@@ -4,7 +4,7 @@ import { createGame } from '../js/game.js';
 import { aiTurn } from '../js/ai.js';
 import {
   startTurn, winner, cellCount, playerIncome, makeUnit, attackHex,
-  airStrike, airMove, aircraftAt, build, attackAll,
+  airStrike, airMove, aircraftAt, build, attackAll, razeOwn, canRazeOwn, canRecruit,
   MAX_UNITS_PER_HEX, UNITS, UPGRADES, AIR_RANGE,
 } from '../js/rules.js';
 import { neighbors, hexDistance } from '../js/hex.js';
@@ -129,6 +129,67 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   check(game.players[0].money === 200 - 10 - 50, 'paid full cost of each');
 }
 
+// --- Mechanics: scorched earth (raze your own improvement) ---
+{
+  const game = createGame(14);
+  const cell = [...game.cells.values()].find(c => c.terrain !== 'sea');
+  cell.owner = 0; cell.upgrade = 'factory'; cell.units = [];
+  check(canRazeOwn(game, cell, 0) === 'needs a unit on the hex', 'self-raze needs a garrison');
+  cell.units = [makeUnit('basic', 0)];
+  check(canRazeOwn(game, cell, 0) === null, 'self-raze allowed with a unit present');
+  check(razeOwn(game, cell, 0) === null, 'razed own improvement');
+  check(cell.upgrade === null, 'improvement gone after self-raze');
+  check(cell.owner === 0, 'self-raze keeps the hex');
+  check(razeOwn(game, cell, 0) === 'no improvement to raze', 'nothing left to raze');
+  // Can't use it on someone else's land.
+  cell.upgrade = 'farm'; cell.owner = 1;
+  check(canRazeOwn(game, cell, 0) === 'not your land', 'cannot self-raze enemy land');
+}
+
+// --- Mechanics: mech and air strikes raze improvements (units still standing) ---
+{
+  const game = createGame(12);
+  // Low-defence target so every heavy hit lands: farmland (def 1) + infantry (def 1).
+  const to = [...game.cells.values()].find(c =>
+    c.terrain === 'farmland' && neighbors(game.cells, c).some(n => n.terrain !== 'sea'));
+  const from = neighbors(game.cells, to).find(n => n.terrain !== 'sea');
+  to.owner = 1; to.fort = false; to.upgrade = 'factory';
+  to.units = [makeUnit('basic', 1)];
+  const mech = makeUnit('mech', 0); mech.actions = UNITS.mech.actions;
+  from.owner = 0; from.units = [mech];
+  const res = attackHex(game, from, to, 0);
+  check(!res.error, `mech attack errored: ${res.error}`);
+  check(to.upgrade === null, 'mech razed the factory');
+  check(to.units.length === 1 && to.units[0].owner === 1, 'defender still stands after razing');
+  check(to.owner === 1, 'razing does not capture the hex');
+
+  // Infantry can never raze — the improvement survives whatever the dice do.
+  to.upgrade = 'farm';
+  const basic = makeUnit('basic', 0); basic.actions = UNITS.basic.actions;
+  from.units = [basic];
+  attackHex(game, from, to, 0);
+  check(to.upgrade === 'farm', 'infantry cannot raze an improvement');
+}
+
+// --- Mechanics: air strikes raze improvements too ---
+{
+  const game = createGame(13);
+  const land = [...game.cells.values()].filter(c => c.terrain !== 'sea');
+  const base = land[0]; base.owner = 0; base.upgrade = 'airbase';
+  const target = land.find(c => c.terrain === 'farmland' &&
+    hexDistance(base, c) > 1 && hexDistance(base, c) <= AIR_RANGE);
+  if (target) {
+    target.owner = 1; target.fort = false; target.upgrade = 'factory';
+    target.units = [makeUnit('basic', 1)];
+    const plane = makeUnit('aircraft', 0); plane.actions = UNITS.aircraft.actions;
+    base.units.push(plane);
+    const res = airStrike(game, base, target, 0);
+    check(!res.error, `air raze errored: ${res.error}`);
+    check(target.upgrade === null, 'air strike razed the factory');
+    check(target.units.length === 1, 'defender still stands after air razing');
+  }
+}
+
 // --- Mechanics: aircraft strike, attrition and redeployment ---
 {
   const game = createGame(6);
@@ -162,7 +223,7 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
 }
 
 // --- Regression: air strikes SINK ships, never capture them ---
-// (Bug: enemy aircraft boarded a captured fishing boat, flipping it back each turn.)
+// (Bug: enemy aircraft boarded a captured transport, flipping it back each turn.)
 {
   const game = createGame(9);
   const land = [...game.cells.values()].find(c => c.terrain !== 'sea');
@@ -170,26 +231,95 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   land.upgrade = 'airbase';
   const sea = [...game.cells.values()].find(c =>
     c.terrain === 'sea' && hexDistance(land, c) > 0 && hexDistance(land, c) <= AIR_RANGE);
-  const fish = makeUnit('fishing', 1);
-  sea.units = [fish];
+  const boat = makeUnit('transport', 1);
+  sea.units = [boat];
   const plane = makeUnit('aircraft', 0);
-  plane.actions = UNITS.aircraft.actions;
   land.units.push(plane);
-  const res = airStrike(game, land, sea, 0);
-  check(!res.error, `air strike on ship errored: ${res.error}`);
-  check(!sea.units.includes(fish), 'air strike must sink the fishing boat');
-  check(sea.units.every(u => u.owner !== 0), 'air strike must not capture the fishing boat');
+  for (let i = 0; i < 10 && sea.units.includes(boat); i++) {
+    plane.actions = UNITS.aircraft.actions;
+    const res = airStrike(game, land, sea, 0);
+    check(!res.error, `air strike on ship errored: ${res.error}`);
+  }
+  check(!sea.units.includes(boat), 'air strike must sink the transport');
+  check(sea.units.every(u => u.owner !== 0), 'air strike must not capture the transport');
 
-  // A warship boarding the same boat in adjacent surface combat DOES capture it.
+  // A warship boarding the same transport in adjacent surface combat DOES capture it.
   const seaAdj = neighbors(game.cells, sea).find(n => n.terrain === 'sea');
   if (seaAdj) {
-    const fish2 = makeUnit('fishing', 1);
-    sea.units = [fish2];
+    const boat2 = makeUnit('transport', 1);
+    sea.units = [boat2];
     const ws = makeUnit('warship', 0);
-    ws.actions = 5;
     seaAdj.units = [ws];
-    for (let i = 0; i < 10 && fish2.owner === 1; i++) { ws.actions = 5; attackHex(game, seaAdj, sea, 0); }
-    check(fish2.owner === 0, 'warship boarding should capture the fishing boat');
+    for (let i = 0; i < 10 && boat2.owner === 1; i++) { ws.actions = 5; attackHex(game, seaAdj, sea, 0); }
+    check(boat2.owner === 0, 'warship boarding should capture the transport');
+  }
+}
+
+// --- Mechanics: warship anti-air covers the hexes around it ---
+{
+  const game = createGame(15);
+  const land = [...game.cells.values()].filter(c => c.terrain !== 'sea');
+  const base = land[0];
+  base.owner = 0; base.upgrade = 'airbase';
+  // A low-defence target in range (so strikes always land — any plane HP loss is
+  // then anti-air, not failed-strike flak) with a sea neighbour for the warship.
+  const target = land.find(c => c.terrain === 'farmland' &&
+    hexDistance(base, c) > 1 && hexDistance(base, c) <= AIR_RANGE &&
+    neighbors(game.cells, c).some(n => n.terrain === 'sea'));
+  if (target) {
+    const seaAdj = neighbors(game.cells, target).find(n => n.terrain === 'sea');
+    target.owner = 1; target.fort = false; target.upgrade = null;
+    const plane = makeUnit('aircraft', 0);
+    base.units.push(plane);
+
+    // No warship nearby: an always-landing strike never scratches the plane.
+    target.units = [makeUnit('basic', 1)];
+    plane.actions = UNITS.aircraft.actions;
+    airStrike(game, base, target, 0);
+    check(plane.hp === UNITS.aircraft.hp, 'no anti-air without a warship near');
+
+    // Station a warship one hex from the target; its flak eventually downs the plane.
+    seaAdj.units = [makeUnit('warship', 1)];
+    let downed = false;
+    for (let i = 0; i < 40 && !downed; i++) {
+      if (!target.units.some(u => u.owner === 1)) target.units.push(makeUnit('basic', 1));
+      plane.actions = UNITS.aircraft.actions;
+      airStrike(game, base, target, 0);
+      downed = !base.units.includes(plane);
+    }
+    check(downed, 'warship anti-air downs a plane striking within one hex');
+  }
+}
+
+// --- Mechanics: SAM battery is factory-built anti-air on land ---
+{
+  const game = createGame(16);
+  // Recruiting: needs a factory, like a mech.
+  const fcell = [...game.cells.values()].find(c => c.terrain !== 'sea');
+  fcell.owner = 0; fcell.upgrade = null; game.players[0].money = 200;
+  check(canRecruit(game, fcell, 'sam', 0) === 'requires a factory', 'SAM needs a factory');
+  fcell.upgrade = 'factory';
+  check(canRecruit(game, fcell, 'sam', 0) === null, 'SAM recruitable at a factory');
+
+  // Interception: a SAM downs planes striking within one hex of it.
+  const land = [...game.cells.values()].filter(c => c.terrain !== 'sea');
+  const base = land[0]; base.owner = 0; base.upgrade = 'airbase';
+  const target = land.find(c => c.terrain === 'farmland' &&
+    hexDistance(base, c) > 1 && hexDistance(base, c) <= AIR_RANGE &&
+    neighbors(game.cells, c).some(n => n.terrain !== 'sea' && n !== base));
+  if (target) {
+    const samCell = neighbors(game.cells, target).find(n => n.terrain !== 'sea' && n !== base);
+    samCell.owner = 1; samCell.units = [makeUnit('sam', 1)];
+    target.owner = 1; target.fort = false; target.upgrade = null;
+    const plane = makeUnit('aircraft', 0); base.units.push(plane);
+    let downed = false;
+    for (let i = 0; i < 40 && !downed; i++) {
+      if (!target.units.some(u => u.owner === 1)) target.units.push(makeUnit('basic', 1));
+      plane.actions = UNITS.aircraft.actions;
+      airStrike(game, base, target, 0);
+      downed = !base.units.includes(plane);
+    }
+    check(downed, 'SAM anti-air downs a plane striking within one hex');
   }
 }
 

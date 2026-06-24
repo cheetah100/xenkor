@@ -53,6 +53,17 @@ function* aiBuild(game, p, distEnemy) {
     if (!build(game, cell, 'farm', p)) yield 'build';
   }
 
+  // Barracks field infantry (as factories field mechs). Without one the army
+  // can't grow, so the first barracks is an early priority; add more with size.
+  const wantBarracks = 1 + Math.floor(mine.length / 8);
+  if (mine.filter(c => c.upgrade === 'barracks').length < wantBarracks && pl.money >= 30 + reserve) {
+    const spot = mine
+      .filter(c => !c.upgrade && (distEnemy.get(key(c.q, c.r)) ?? 99) >= 2)
+      .sort((a, b) => (distEnemy.get(key(a.q, a.r)) ?? 99) - (distEnemy.get(key(b.q, b.r)) ?? 99))[0]
+      ?? mine.find(c => !c.upgrade);
+    if (spot && !build(game, spot, 'barracks', p)) yield 'build';
+  }
+
   // One factory early, more as the empire grows.
   const factories = mine.filter(c => c.upgrade === 'factory').length;
   const wantFactories = 1 + Math.floor(mine.length / 18);
@@ -63,19 +74,11 @@ function* aiBuild(game, p, distEnemy) {
     if (safe && !build(game, safe, 'factory', p)) yield 'build';
   }
 
-  // A port for fishing income and invasions once the economy is moving.
+  // A port to mount amphibious invasions once the economy is moving.
   const hasPort = mine.some(c => c.upgrade === 'port');
   if (!hasPort && pl.money >= 30 + reserve && game.turn > 5) {
     const coastal = mine.find(c => isCoastal(game, c) && !canBuild(game, c, 'port', p));
     if (coastal && !build(game, coastal, 'port', p)) yield 'build';
-  }
-  const portCell = mine.find(c => c.upgrade === 'port');
-  if (portCell) {
-    const fishing = [...game.cells.values()]
-      .flatMap(c => c.units).filter(u => u.owner === p && u.type === 'fishing').length;
-    if (fishing < 3 && pl.money >= 15 + reserve && !canRecruit(game, portCell, 'fishing', p)) {
-      if (!recruit(game, portCell, 'fishing', p)) yield 'recruit';
-    }
   }
 
   // Air power once the empire can afford it: an air base stocked with aircraft.
@@ -107,19 +110,19 @@ function* aiBuild(game, p, distEnemy) {
     .reduce((s, c) => s + c.units.filter(u => u.owner === p).length, 0);
   const armyCap = 15 + Math.floor(mine.length / 3);
   if (armySize >= armyCap) return;
-  const frontline = mine
-    .filter(c => c.units.length < MAX_UNITS_PER_HEX)
+  // Troops can only be raised at military buildings now: mechs at factories,
+  // infantry at barracks. Spend forward — fill the cells closest to the enemy.
+  const prod = mine
+    .filter(c => (c.upgrade === 'barracks' || c.upgrade === 'factory') && c.units.length < MAX_UNITS_PER_HEX)
     .sort((a, b) => (distEnemy.get(key(a.q, a.r)) ?? 99) - (distEnemy.get(key(b.q, b.r)) ?? 99));
   let guard = 24;
-  while (pl.money >= 10 && frontline.length && guard--) {
-    const cell = frontline[0];
-    if (cell.units.length >= MAX_UNITS_PER_HEX) { frontline.shift(); continue; }
-    const type = cell.upgrade === 'factory' && pl.money >= 40 + reserve ? 'mech' : 'basic';
-    if (recruit(game, cell, type, p) && (type === 'basic' || recruit(game, cell, 'basic', p))) {
-      frontline.shift();
-    } else {
-      yield 'recruit';
-    }
+  while (pl.money >= 10 && prod.length && guard--) {
+    const cell = prod[0];
+    if (cell.units.length >= MAX_UNITS_PER_HEX) { prod.shift(); continue; }
+    const type = cell.upgrade === 'factory' ? 'mech' : 'basic';
+    if (type === 'mech' && pl.money < 40 + reserve) { prod.shift(); continue; }
+    if (recruit(game, cell, type, p)) prod.shift(); // can't recruit here right now
+    else yield 'recruit';                            // recruited; keep filling this cell
   }
 }
 

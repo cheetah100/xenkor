@@ -232,6 +232,29 @@ function drawEffect(ctx, fx) {
     ctx.font = '18px sans-serif';
     ctx.fillText('✈️', 0, 0);
     ctx.restore();
+  } else if (fx.type === 'flak') {
+    // Anti-air: bright tracer rounds streak from the battery up to the planes,
+    // bursting in puffs at altitude (with a 💥 if a plane is knocked down).
+    ctx.globalAlpha = 1 - t;
+    ctx.fillStyle = '#ffee58';
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const j = (i / n + t) % 1;
+      ctx.beginPath();
+      ctx.arc(fx.x1 + (fx.x2 - fx.x1) * j, fx.y1 + (fx.y2 - fx.y1) * j, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#b0bec5';
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath();
+      ctx.arc(fx.x2 + (k - 1) * 12, fx.y2 - 12, 2 + t * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (fx.downed && t < 0.6) {
+      ctx.font = '18px sans-serif';
+      ctx.fillText('💥', fx.x2, fx.y2 - 12);
+    }
   } else if (fx.type === 'blast') {
     // Expanding shockwave ring + flash for a hit.
     const r = 6 + t * 26;

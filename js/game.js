@@ -30,6 +30,9 @@ export function createGame(seed = (Math.random() * 2 ** 31) | 0) {
 
   starts.forEach((cell, i) => {
     cell.owner = i;
+    // Each capital starts with a barracks so infantry can be raised from turn 1;
+    // without it the opening has no army production and wars never get going.
+    cell.upgrade = 'barracks';
     for (let n = 0; n < 3; n++) {
       const u = makeUnit('basic', i);
       u.actions = UNITS.basic.actions;

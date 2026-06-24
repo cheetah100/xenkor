@@ -5,10 +5,10 @@
 import { key, isAdjacent } from './hex.js';
 import {
   UNITS, UPGRADES, FORT, TERRAIN,
-  reachable, pathTo, moveStack, attackAll, canAttack, build, canBuild,
+  reachable, pathTo, moveStack, attackAll, canAttack, build, canBuild, razeOwn, canRazeOwn,
   recruit, canRecruit, embark, disembark, transportSpace, cargoCount,
   airMove, aircraftAt,
-  ownUnits, playerIncome, cellCount, domainOf,
+  ownUnits, playerIncome, cellIncome, cellCount, domainOf,
   startTurn, winner, surrender,
 } from './rules.js';
 import { aiTurnGen } from './ai.js';
@@ -18,6 +18,27 @@ import { createGame } from './game.js';
 
 const $ = id => document.getElementById(id);
 const HUMAN = 0;
+
+// Hover blurbs for the build/recruit buttons (avoid " & < > so they sit safely
+// inside HTML attributes). Keyed by the same ids used by canBuild / canRecruit.
+const BUILD_TIPS = {
+  farm:     'Farm — raises this hex income: +3 on farmland, +1 on mountains. Fastest payback in the game. Not on desert.',
+  barracks: 'Barracks — lets this hex recruit infantry.',
+  factory:  'Factory — +5 income each turn, and lets this hex build mechanised units.',
+  port:     'Port — coastal only. Builds ships (transports, warships, carriers) and musters infantry marines.',
+  airbase:  'Air base — lets this hex build and rearm aircraft.',
+  fort:     'Fortification — +3 defense here, stacking with terrain. Kept (not razed) when the hex is captured.',
+};
+const RAZE_TIP = 'Raze — destroy your own improvement here to deny it to the enemy. Needs one of your units on the hex.';
+const UNIT_TIPS = {
+  basic:     'Infantry — 3 actions. Captures hexes and assets intact. Built at a barracks or port.',
+  mech:      'Mechanised — 5 actions, high HP, and razes enemy improvements as it attacks. Needs a factory.',
+  sam:       'SAM battery — anti-air: shoots down aircraft striking within one hex (like a warship on land). No ground attack. Needs a factory.',
+  warship:   'Warship — 5 actions. Screens the fleet, bombards an adjacent shore, and provides anti-air cover.',
+  carrier:   'Carrier — slow mobile air base carrying 3 aircraft. Built at a port.',
+  transport: 'Transport — ferries 3 infantry or 1 mech across the sea. Capturable.',
+  aircraft:  'Aircraft — strikes any hex within range 6 and razes improvements. Needs an air base.',
+};
 
 let game;
 let view = { sel: null, reach: null, parents: null, attackable: null, drag: null };
@@ -37,6 +58,7 @@ export function boot() {
   $('new-game').addEventListener('click', newGame);
   $('toggle-fx').addEventListener('click', () => { fx.animations = !fx.animations; syncToggles(); });
   $('toggle-sound').addEventListener('click', () => { fx.sound = !fx.sound; syncToggles(); });
+  initTooltips();
   syncToggles();
   refresh();
   // Debug/test hook.
@@ -229,6 +251,35 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
 }
 
+// Cursor-following popup for the action buttons. Delegated on #actions once, so it
+// survives re-renders; disabled buttons don't fire hover events and rely on title.
+function initTooltips() {
+  const tip = $('tooltip');
+  const actions = $('actions');
+  const place = e => {
+    const pad = 14, r = tip.getBoundingClientRect();
+    let x = e.clientX + pad, y = e.clientY + pad;
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+    tip.style.left = `${Math.max(8, x)}px`;
+    tip.style.top = `${Math.max(8, y)}px`;
+  };
+  actions.addEventListener('mouseover', e => {
+    const el = e.target.closest('[data-tip]');
+    if (!el) return;
+    tip.textContent = el.dataset.tip;
+    tip.classList.remove('hidden');
+    place(e);
+  });
+  actions.addEventListener('mousemove', e => {
+    if (!tip.classList.contains('hidden')) place(e);
+  });
+  actions.addEventListener('mouseout', e => {
+    const el = e.target.closest('[data-tip]');
+    if (el && !el.contains(e.relatedTarget)) tip.classList.add('hidden');
+  });
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- turn sequencing ----------
@@ -353,16 +404,23 @@ function renderActions() {
   const usable = cell && cell.owner === HUMAN && cell.terrain !== 'sea' && !busy && !game.over;
   const blocked = 'select one of your land hexes';
 
+  // Enabled buttons get a hover popup (data-tip); disabled ones fall back to the
+  // native title, which pairs the same blurb with the reason it is unavailable.
+  const tipAttr = (tip, err) => err ? `disabled title="${tip} — ${err}"` : `data-tip="${tip}"`;
+
   let html = '<h3>Build</h3><div class="btn-grid">';
   for (const [what, b] of [...Object.entries(UPGRADES), ['fort', { ...FORT, emoji: '🧱' }]]) {
     const err = usable ? canBuild(game, cell, what, HUMAN) : blocked;
-    html += `<button class="bbtn" data-build="${what}" ${err ? `disabled title="${err}"` : ''}>` +
+    html += `<button class="bbtn" data-build="${what}" ${tipAttr(BUILD_TIPS[what], err)}>` +
       `${b.emoji} ${b.name}<span class="cost">${b.cost}</span></button>`;
   }
+  // Scorched earth: destroy your own improvement (needs a unit on the hex).
+  const razeErr = usable ? canRazeOwn(game, cell, HUMAN) : blocked;
+  html += `<button class="bbtn" data-raze ${tipAttr(RAZE_TIP, razeErr)}>💥 Raze</button>`;
   html += '</div><h3>Recruit</h3><div class="btn-grid">';
   for (const [type, u] of Object.entries(UNITS)) {
     const err = usable ? canRecruit(game, cell, type, HUMAN) : blocked;
-    html += `<button class="bbtn" data-recruit="${type}" ${err ? `disabled title="${err}"` : ''}>` +
+    html += `<button class="bbtn" data-recruit="${type}" ${tipAttr(UNIT_TIPS[type], err)}>` +
       `${u.emoji} ${u.name}<span class="cost">${u.cost}</span></button>`;
   }
   html += '</div>';
@@ -385,6 +443,12 @@ function renderActions() {
       refresh();
     });
   }
+  act.querySelector('[data-raze]')?.addEventListener('click', () => {
+    const err = razeOwn(game, cell, HUMAN);
+    if (err) toast(err);
+    select(view.sel);
+    refresh();
+  });
 }
 
 function renderHexInfo() {
@@ -402,7 +466,7 @@ function renderHexInfo() {
     : cell.owner === null ? 'Unclaimed'
     : `<span class="dot" style="background:${game.players[cell.owner].color}"></span>${game.players[cell.owner].name}`;
   let html = `<h3>${cell.terrain[0].toUpperCase() + cell.terrain.slice(1)}</h3>
-    <p>Owner: ${ownerName}<br>Defense: ${t.defense + (cell.fort ? 3 : 0)} · Income: ${t.income}</p>`;
+    <p>Owner: ${ownerName}<br>Defense: ${t.defense + (cell.fort ? 3 : 0)} · Income: ${cell.terrain === 'sea' ? 0 : cellIncome(cell)}</p>`;
   const tags = [];
   if (cell.upgrade) tags.push(`${UPGRADES[cell.upgrade].emoji} ${UPGRADES[cell.upgrade].name}`);
   if (cell.fort) tags.push('🧱 fortified');

@@ -58,6 +58,7 @@ const sfx = {
   plane() { tone('sawtooth', 220, 180, 0.5, 0.08); },
   splash() { noise(0.4, 0.22, 500); tone('sine', 300, 120, 0.3, 0.12); },
   miss() { noise(0.05, 0.1, 1200); },
+  flak() { for (let i = 0; i < 4; i++) setTimeout(() => { noise(0.05, 0.16, 1000); tone('square', 640, 200, 0.08, 0.05); }, i * 65); },
 };
 
 // ---------- animation ----------
@@ -114,6 +115,15 @@ export async function playCombat(canvas, game, view, ev, speed = 1) {
       for (const p of fxPlanes) p.t = Math.max(0, Math.min(1, (t - p.delay) / (1 - p.delay)));
       redraw();
     });
+    // Defenders' anti-air (warships, SAM batteries) engages the incoming planes.
+    if (ev.flak) {
+      sfx.flak();
+      const guns = ev.flak.cells.map(k => game.cells.get(k)).filter(Boolean).map(cellCenter);
+      view.effects = guns.map(g => ({
+        type: 'flak', x1: g.x, y1: g.y, x2: b.x, y2: b.y, t: 0, downed: ev.flak.downed > 0,
+      }));
+      await raf(D(360), t => { for (const e of view.effects) e.t = t; redraw(); });
+    }
   } else {
     sfx.gun();
     view.effects = [{ type: 'tracer', x1: a.x, y1: a.y, x2: b.x, y2: b.y, t: 0, hit: ev.hits > 0 }];

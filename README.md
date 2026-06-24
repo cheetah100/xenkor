@@ -1,8 +1,9 @@
 # Xenkor
 
 A turn-based hex strategy game in the browser — you against four NPC powers.
-Base rules are in [xenkor-spec.md](xenkor-spec.md); see "House rules" below for
-where the implementation has since evolved past the spec.
+The full rules are in [xenkor-spec.md](xenkor-spec.md), which is authoritative
+and kept in sync with the code. The notes below highlight a few rules worth
+knowing up front.
 
 ## Run
 
@@ -35,11 +36,24 @@ npm start            # python3 -m http.server 8000
   instant turns). Last power holding territory wins. You can also surrender and
   choose which NPC inherits your army.
 
-## House rules (changes from the original spec)
+## Rules worth knowing
 
-- **One upgrade per cell**: farm | factory | port | air base. A cell's upgrade
-  can be replaced later by paying the new upgrade's full cost. Fortification
-  is separate and stacks with the upgrade.
+- **Improvements drive income**: bare land earns only a small trickle (1 on
+  farmland/mountains, 0 on desert) — enough to avoid being locked out, but the
+  real economy is farms (+3/+1) and factories (+5) built on top.
+- **One upgrade per cell**: farm | barracks | factory | port | air base. A
+  cell's upgrade can be replaced later by paying the new upgrade's full cost.
+  Fortification is separate and stacks with the upgrade.
+- **Barracks** (cost 30) recruit infantry, the way a factory is required for
+  mechs. Each player's capital starts with one. Ports also muster infantry
+  (marines), so a coastal assault force can be raised at the water's edge.
+- **Mechs and aircraft raze improvements**: a successful mech or air hit can
+  destroy the target hex's improvement outright — even while its defenders still
+  stand — instead of hitting a unit. Infantry can't raze; they capture assets
+  intact. Fortifications are never razed, only captured.
+- **Scorched earth**: with one of your land hexes selected, the **💥 Raze**
+  button destroys your own improvement there to deny it to the enemy — allowed
+  only while you still hold the hex with a unit on it.
 - **Aircraft** (cost 30) are housed at air bases and strike any enemy hex
   within **range 6** — they don't move hex by hex. Failed strikes cost the
   aircraft hp: planes are lost to flak. Aircraft caught on the ground when a
@@ -50,6 +64,11 @@ npm start            # python3 -m http.server 8000
   redeploy exactly as from a land base. A sunk carrier takes its planes down.
 - **Warships can bombard** adjacent land hexes, destroying defenders, but can
   never capture or enter land.
+- **Anti-air** (warships & SAM batteries): a warship (at sea) or a **SAM battery**
+  (cost 30, factory-built land unit) automatically engages aircraft striking any
+  hex within one of it, firing free each sortie to knock 1 hp off the plane
+  (warship ~50%, SAM ~67%). SAMs have no ground attack and are fragile, so screen
+  them — but stack anti-air and an air wing gets shredded.
 
 ## Code layout
 

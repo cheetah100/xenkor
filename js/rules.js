@@ -3,8 +3,10 @@
 
 import { key, neighbors, isAdjacent, hexDistance } from './hex.js';
 
+// Unimproved land earns a small trickle (farmland/mountains 1, desert 0) so a
+// player can never be locked out of recovering; farms and factories stack on top.
 export const TERRAIN = {
-  farmland:  { income: 3, defense: 1 },
+  farmland:  { income: 1, defense: 1 },
   mountains: { income: 1, defense: 3 },
   desert:    { income: 0, defense: 0 },
   sea:       { income: 0, defense: 0 },
@@ -13,29 +15,35 @@ export const TERRAIN = {
 // A cell holds at most ONE upgrade, but it can be replaced later by paying the
 // new upgrade's full cost. Fortification is separate and stacks with it.
 export const UPGRADES = {
-  farm:    { cost: 10, name: 'Farm',     emoji: '🌾' },
-  factory: { cost: 50, name: 'Factory',  emoji: '🏭' },
-  port:    { cost: 30, name: 'Port',     emoji: '⚓' },
-  airbase: { cost: 40, name: 'Air base', emoji: '🛫' },
+  farm:     { cost: 10, name: 'Farm',     emoji: '🌾' },
+  barracks: { cost: 30, name: 'Barracks', emoji: '🏰' },
+  factory:  { cost: 50, name: 'Factory',  emoji: '🏭' },
+  port:     { cost: 30, name: 'Port',     emoji: '⚓' },
+  airbase:  { cost: 40, name: 'Air base', emoji: '🛫' },
 };
 export const FORT = { cost: 20, name: 'Fortification' };
 export const AIR_RANGE = 6;
+// Warships throw up anti-air fire over any hex within one of them: each engages an
+// attacking plane on 1d6 + its `aa` rating beating this number (rating 3 → needs 4+).
+export const FLAK_RANGE = 1;
+const FLAK_EVASION = 6;
 
+// Units with an `aa` rating throw up anti-air fire at planes within FLAK_RANGE.
 export const UNITS = {
   basic:     { name: 'Infantry',   cost: 10, actions: 3, hp: 2, atk: 1, def: 1, domain: 'land', emoji: '🪖' },
   mech:      { name: 'Mechanised', cost: 40, actions: 5, hp: 4, atk: 3, def: 2, domain: 'land', emoji: '🚜' },
-  warship:   { name: 'Warship',    cost: 35, actions: 5, hp: 3, atk: 3, def: 2, domain: 'sea',  emoji: '🚢' },
+  sam:       { name: 'SAM battery', cost: 30, actions: 2, hp: 2, atk: 0, def: 1, domain: 'land', emoji: '🚀', aa: 4 },
+  warship:   { name: 'Warship',    cost: 35, actions: 5, hp: 3, atk: 3, def: 2, domain: 'sea',  emoji: '🚢', aa: 3 },
   carrier:   { name: 'Carrier',    cost: 60, actions: 3, hp: 3, atk: 0, def: 1, domain: 'sea',  emoji: '🛳️', capacity: 3 },
   transport: { name: 'Transport',  cost: 20, actions: 3, hp: 2, atk: 0, def: 0, domain: 'sea',  emoji: '⛴️', capturable: true, capacity: 3 },
-  fishing:   { name: 'Fishing vessel', cost: 15, actions: 1, hp: 1, atk: 0, def: 0, domain: 'sea', emoji: '🎣', capturable: true },
   aircraft:  { name: 'Aircraft',   cost: 30, actions: 2, hp: 2, atk: 3, def: 0, domain: 'air',  emoji: '✈️' },
 };
 
 export const MAX_UNITS_PER_HEX = 9;
 // When a hex takes a hit, units soak it in this order (warships screen the fleet).
-const HIT_PRIORITY = ['warship', 'carrier', 'mech', 'basic', 'aircraft', 'transport', 'fishing'];
-// Cargo slots: 1 transport carries 3 infantry OR 1 mechanised.
-export const CARGO_SLOTS = { basic: 1, mech: 3 };
+const HIT_PRIORITY = ['warship', 'carrier', 'mech', 'basic', 'sam', 'aircraft', 'transport'];
+// Cargo slots: 1 transport carries 3 infantry, OR 1 mechanised, OR 1 SAM battery.
+export const CARGO_SLOTS = { basic: 1, mech: 3, sam: 3 };
 
 let nextUnitId = 1;
 export function makeUnit(type, owner) {
@@ -55,17 +63,19 @@ export function farmIncome(cell) {
   return cell.terrain === 'farmland' ? 3 : cell.terrain === 'mountains' ? 1 : 0;
 }
 
+// Per-turn income from a single owned land cell: the terrain's base trickle plus
+// whatever a farm or factory adds on top.
+export function cellIncome(cell) {
+  let n = TERRAIN[cell.terrain].income;
+  if (cell.upgrade === 'farm') n += farmIncome(cell);
+  else if (cell.upgrade === 'factory') n += 5;
+  return n;
+}
+
 export function playerIncome(game, p) {
   let total = 0;
   for (const cell of game.cells.values()) {
-    if (cell.owner === p) {
-      total += TERRAIN[cell.terrain].income;
-      if (cell.upgrade === 'farm') total += farmIncome(cell);
-      if (cell.upgrade === 'factory') total += 5;
-    }
-    for (const u of cell.units) {
-      if (u.type === 'fishing' && u.owner === p) total += 3;
-    }
+    if (cell.owner === p) total += cellIncome(cell);
   }
   return total;
 }
@@ -148,6 +158,24 @@ export function build(game, cell, what, p) {
   return null;
 }
 
+// Scorched earth: a player may raze their own improvement to deny it to an
+// advancing enemy — but only on a hex they still hold and have a unit standing on.
+export function canRazeOwn(game, cell, p) {
+  if (cell.owner !== p || cell.terrain === 'sea') return 'not your land';
+  if (!cell.upgrade) return 'no improvement to raze';
+  if (ownUnits(cell, p).length < 1) return 'needs a unit on the hex';
+  return null;
+}
+
+export function razeOwn(game, cell, p) {
+  const err = canRazeOwn(game, cell, p);
+  if (err) return err;
+  const razed = cell.upgrade;
+  cell.upgrade = null;
+  log(game, `${game.players[p].name} razed their own ${UPGRADES[razed].name.toLowerCase()}.`);
+  return null;
+}
+
 // Sea hex next to a port cell where a new naval unit can appear.
 export function navalSpawnCell(game, cell, p) {
   let best = null;
@@ -164,7 +192,10 @@ export function canRecruit(game, cell, type, p) {
   const def = UNITS[type];
   if (cell.owner !== p || cell.terrain === 'sea') return 'not your land';
   if (game.players[p].money < def.cost) return 'not enough money';
-  if (type === 'mech' && cell.upgrade !== 'factory') return 'requires a factory';
+  if (type === 'basic' && cell.upgrade !== 'barracks' && cell.upgrade !== 'port') {
+    return 'requires a barracks or port';
+  }
+  if ((type === 'mech' || type === 'sam') && cell.upgrade !== 'factory') return 'requires a factory';
   if (type === 'aircraft' && cell.upgrade !== 'airbase') return 'requires an air base';
   if (def.domain === 'sea') {
     if (cell.upgrade !== 'port') return 'requires a port';
@@ -285,7 +316,15 @@ function pickDefender(cell, p) {
 // One successful hit lands on the hex: damage, then destroy/sink or capture.
 // Boarding (flag-swap) only happens in adjacent surface combat; air strikes
 // and shore bombardment can only sink, never capture.
-function applyHit(game, to, p, canCapture) {
+function applyHit(game, to, p, canCapture, canRaze) {
+  // Mech and air firepower can raze the hex's improvement outright — even with
+  // its defenders still standing — instead of the hit landing on a unit.
+  if (canRaze && to.upgrade) {
+    const razed = to.upgrade;
+    to.upgrade = null;
+    log(game, `${game.players[p].name} razed a ${UPGRADES[razed].name.toLowerCase()}.`);
+    return `razed ${UPGRADES[razed].name}`;
+  }
   const d = pickDefender(to, p);
   d.hp--;
   if (d.hp > 0) return 'hit';
@@ -325,8 +364,9 @@ export function attackHex(game, from, to, p) {
     const roll = 1 + Math.floor(game.rng() * 6);
     const total = roll + UNITS[a.type].atk;
     if (total > defTotal) {
-      // Boarding is only possible in same-domain surface combat, not bombardment.
-      const outcome = applyHit(game, to, p, !bombard);
+      // Boarding only in same-domain surface combat (not bombardment); mechs can
+      // raze the hex's improvement.
+      const outcome = applyHit(game, to, p, !bombard, a.type === 'mech');
       results.rolls.push({ roll, total, defTotal, success: true, outcome, attacker: a.type });
     } else {
       a.hp--;
@@ -359,8 +399,8 @@ export function canAttack(game, from, to, p) {
   if (hexDistance(from, to) <= AIR_RANGE &&
       aircraftAt(from, p).some(a => a.actions > 0)) return true;
   if (!isAdjacent(from, to)) return false;
-  // Same-domain surface combat needs a unit that can actually fight — fishing
-  // vessels and transports (attack 0) only earn money, they never attack.
+  // Same-domain surface combat needs a unit that can actually fight —
+  // transports (attack 0) carry cargo but never attack.
   if (domainOf(from) === domainOf(to)) {
     return ownUnits(from, p).some(u =>
       u.actions > 0 && UNITS[u.type].atk > 0 && UNITS[u.type].domain !== 'air');
@@ -389,14 +429,23 @@ function removeAircraft(cell, plane) {
   }
 }
 
+// Hexes within FLAK_RANGE of the struck hex (where anti-air units can reach it).
+function flakCellsAround(game, to) {
+  return [...game.cells.values()].filter(c => hexDistance(c, to) <= FLAK_RANGE);
+}
+
 // Every ready aircraft based at `from` strikes `to` (any hex within range 6).
-// A failed strike costs the aircraft 1 hp — planes are lost to flak.
+// A failed strike costs the aircraft 1 hp; nearby enemy warships add anti-air fire.
 export function airStrike(game, from, to, p) {
   if (hexDistance(from, to) > AIR_RANGE) return { error: 'out of aircraft range' };
   const planes = aircraftAt(from, p).filter(a => a.actions > 0);
   if (!planes.length) return { error: 'no aircraft ready' };
   if (!enemyUnits(to, p).length) return { error: 'nothing to attack' };
   const results = { rolls: [], error: null };
+  const flakCells = flakCellsAround(game, to);
+  // Cells holding an enemy anti-air unit that will engage the incoming planes.
+  const flakGuns = flakCells.filter(c => c.units.some(u => u.owner !== p && UNITS[u.type].aa));
+  let downedByFlak = 0, flakHits = 0;
   for (const a of planes) {
     if (!enemyUnits(to, p).length) break;
     a.actions--;
@@ -404,8 +453,8 @@ export function airStrike(game, from, to, p) {
     const roll = 1 + Math.floor(game.rng() * 6);
     const total = roll + UNITS.aircraft.atk;
     if (total > defTotal) {
-      // Aircraft sink ships; they can't board or capture.
-      const outcome = applyHit(game, to, p, false);
+      // Aircraft sink ships and raze improvements; they can't board or capture.
+      const outcome = applyHit(game, to, p, false, true);
       results.rolls.push({ roll, total, defTotal, success: true, outcome, attacker: 'aircraft' });
     } else {
       a.hp--;
@@ -416,12 +465,29 @@ export function airStrike(game, from, to, p) {
       }
       results.rolls.push({ roll, total, defTotal, success: false, outcome, attacker: 'aircraft' });
     }
+    // Enemy anti-air units (warships, SAM batteries) covering the target engage
+    // the plane — free, reactive fire.
+    if (a.hp > 0) {
+      const guns = flakCells.flatMap(c => c.units).filter(u => u.owner !== p && UNITS[u.type].aa);
+      for (const g of guns) {
+        if (1 + Math.floor(game.rng() * 6) + UNITS[g.type].aa > FLAK_EVASION) {
+          a.hp--; flakHits++;
+          if (a.hp <= 0) { removeAircraft(from, a); downedByFlak++; break; }
+        }
+      }
+    }
   }
   const wins = results.rolls.filter(r => r.success).length;
-  log(game, `${game.players[p].name} launched an air strike: ${wins}/${results.rolls.length} hits.`);
+  let line = `${game.players[p].name} launched an air strike: ${wins}/${results.rolls.length} hits.`;
+  if (downedByFlak) line += ` 🎯 Anti-air fire downed ${downedByFlak} aircraft!`;
+  else if (flakHits) line += ` Anti-air fire hit the attackers.`;
+  log(game, line);
   recordFx(game, {
     kind: 'air', from: key(from.q, from.r), to: key(to.q, to.r), attacker: p,
     shots: results.rolls.length, hits: wins, sorties: planes.length,
+    flak: flakGuns.length
+      ? { cells: flakGuns.map(c => key(c.q, c.r)), hits: flakHits, downed: downedByFlak }
+      : null,
   });
   return results;
 }
