@@ -452,6 +452,24 @@ function flakCellsAround(game, to) {
   return [...game.cells.values()].filter(c => hexDistance(c, to) <= FLAK_RANGE);
 }
 
+// Anti-air covering `to` against p's planes. Anti-air only rises in defense of
+// its owner's stake: the gun's owner must own the struck hex or have units
+// standing on it. A rival power's guns stay silent when someone else's hex is
+// bombed — no one spends shells protecting an enemy. Returns the guns that will
+// engage and the cells they fire from (for the flak animation, and for the AI
+// weighing expected attrition before committing planes).
+export function flakCover(game, to, p) {
+  const defends = u => u.owner !== p && UNITS[u.type].aa &&
+    (to.owner === u.owner || to.units.some(d => d.owner === u.owner));
+  const cells = flakCellsAround(game, to).filter(c => c.units.some(defends));
+  return { cells, guns: cells.flatMap(c => c.units).filter(defends) };
+}
+
+// Chance one anti-air gun knocks 1 hp off a plane per sortie (1d6 + aa > 6).
+export function flakHitChance(gun) {
+  return Math.max(0, 6 + UNITS[gun.type].aa - FLAK_EVASION) / 6;
+}
+
 // Every ready aircraft based at `from` strikes `to` (any hex within range 6).
 // A failed strike costs the aircraft 1 hp; nearby enemy warships add anti-air fire.
 export function airStrike(game, from, to, p) {
@@ -460,9 +478,8 @@ export function airStrike(game, from, to, p) {
   if (!planes.length) return { error: 'no aircraft ready' };
   if (!enemyUnits(to, p).length) return { error: 'nothing to attack' };
   const results = { rolls: [], error: null };
-  const flakCells = flakCellsAround(game, to);
-  // Cells holding an enemy anti-air unit that will engage the incoming planes.
-  const flakGuns = flakCells.filter(c => c.units.some(u => u.owner !== p && UNITS[u.type].aa));
+  // Cells holding an anti-air unit that will engage the incoming planes.
+  const flakGuns = flakCover(game, to, p).cells;
   let downedByFlak = 0, flakHits = 0;
   for (const a of planes) {
     if (!enemyUnits(to, p).length) break;
@@ -483,10 +500,11 @@ export function airStrike(game, from, to, p) {
       }
       results.rolls.push({ roll, total, defTotal, success: false, outcome, attacker: 'aircraft' });
     }
-    // Enemy anti-air units (warships, SAM batteries) covering the target engage
-    // the plane — free, reactive fire.
+    // Defending anti-air units (warships, SAM batteries) covering the target
+    // engage the plane — free, reactive fire. Recomputed per sortie: earlier
+    // hits may have killed a gun or its owner's stake in the hex.
     if (a.hp > 0) {
-      const guns = flakCells.flatMap(c => c.units).filter(u => u.owner !== p && UNITS[u.type].aa);
+      const guns = flakCover(game, to, p).guns;
       for (const g of guns) {
         if (1 + Math.floor(game.rng() * 6) + UNITS[g.type].aa > FLAK_EVASION) {
           a.hp--; flakHits++;

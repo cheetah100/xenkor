@@ -29,6 +29,10 @@ npm start            # python3 -m http.server 8000
 - **Build / recruit** with the sidebar buttons when one of your land hexes is
   selected. Mechanised units need a factory; naval units need a port;
   aircraft need an air base.
+- The four NPC powers have **temperaments** — Crimson presses attacks at odds
+  the others won't take, Violet fights for the sky, Amber comes by sea, Jade
+  walls up and outlasts. Same rules and costs for everyone; they just want
+  different things, so expect some powers to fare better than others.
 - **End Turn** lets the four NPCs play out their moves at watchable speed.
   Combat is animated — the camera zooms in on each fight, aircraft fly to their
   targets, hits flash and shake the screen, with synthesized battle sounds.
@@ -70,7 +74,9 @@ npm start            # python3 -m http.server 8000
 - **Anti-air** (warships & SAM batteries): a warship (at sea) or a **SAM battery**
   (cost 30, factory-built land unit) automatically engages aircraft striking any
   hex within one of it, firing free each sortie to knock 1 hp off the plane
-  (warship ~50%, SAM ~67%). SAMs have no ground attack and are fragile, so screen
+  (warship ~50%, SAM ~67%). It only fires in defense of its owner's units and
+  territory — a strike on some other rival's hex nearby doesn't provoke it.
+  SAMs have no ground attack and are fragile, so screen
   them — but stack anti-air and an air wing gets shredded.
 - **Defeat = no production buildings**: a player is knocked out once their every
   barracks, factory, port, and air base has been captured or razed. Holding only

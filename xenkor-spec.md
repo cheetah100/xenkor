@@ -2,7 +2,7 @@
 
 ## Overview
 
-Xenkor is a turn-based hex strategy game for up to 5 players (1 human + 4 NPC initially). Players expand across a procedurally generated map, building economies and military forces, competing for territorial dominance. The last player with cells on the board wins.
+Xenkor is a turn-based hex strategy game for up to 5 players (1 human + 4 NPC initially). Players expand across a procedurally generated map, building economies and military forces, competing for territorial dominance. The last player still holding a production building (barracks, factory, port, or air base) wins — see **Win / Loss Conditions**.
 
 > This document describes the rules as implemented. Where it once differed from
 > the code, the code is now authoritative and this spec has been updated to match.
@@ -202,7 +202,7 @@ Moving into most hexes costs **1 action**, but entering a **mountain** hex costs
 
 ### Hit Allocation
 A hit landed on a hex is absorbed in a fixed order so warships screen the fleet:
-**warship → carrier → mechanised → infantry → aircraft → transport.**
+**warship → carrier → mechanised → infantry → SAM → aircraft → transport.**
 Each hit costs 1 HP; a unit reduced to 0 HP is destroyed/sunk or captured (see below).
 
 ### Land Combat
@@ -223,6 +223,7 @@ Each hit costs 1 HP; a unit reduced to 0 HP is destroyed/sunk or captured (see b
 
 ### Anti-Air (Warships & SAM Batteries)
 - A **warship** (at sea) or a **SAM battery** (on land) automatically engages aircraft striking **any hex within one of it** — its own hex or an adjacent one — so it shields the units and assets around it
+- Anti-air only rises **in defense of its owner**: it fires when the struck hex is its owner's territory or holds its owner's units. A strike on some *other* rival's hex nearby doesn't provoke it — no power spends shells protecting an enemy
 - Each covering unit fires once per incoming sortie: it hits on **1d6 + its anti-air rating beating 6** (warship rating 3 ≈ a coin flip; SAM rating 4 ≈ two-in-three), and a hit costs the plane 1 HP — two hits down it
 - Anti-air is **free and reactive** (it costs the firing unit no actions) and fires in addition to the target's own flak; stacking anti-air units makes their airspace deadly to aircraft
 - A **SAM battery** is a dedicated air-defense unit: built at a factory like a mechanised unit, it has **no ground attack** of its own and is fragile, so it needs other units to protect it from being overrun

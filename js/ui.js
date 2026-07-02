@@ -215,9 +215,11 @@ async function resolveDrop(fromK, toK, maps) {
     const err = disembark(game, from, to, HUMAN);
     if (err) lastErr = err; else acted++;
   }
-  if (!acted && maps.reach.has(toK)) {
+  if (maps.reach.has(toK)) {
+    // Runs even after a successful airMove: a drag from a mixed stack sends the
+    // planes AND walks the ground units, instead of stranding the foot column.
     const err = moveStack(game, from, pathTo(maps.parents, fromK, toK), HUMAN);
-    if (err) lastErr = err; else acted++;
+    if (err) { if (!acted) lastErr = err; } else acted++;
   }
 
   if (!acted) {

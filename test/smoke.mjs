@@ -371,6 +371,48 @@ for (const seed of [1, 42, 1337, 90210, 7]) {
   }
 }
 
+// --- Regression: anti-air only defends its owner's units and territory ---
+// (Bug: a third power's SAM engaged planes striking a hex it had no stake in.)
+{
+  const game = createGame(17);
+  const land = [...game.cells.values()].filter(c => c.terrain !== 'sea');
+  const base = land[0]; base.owner = 0; base.upgrade = 'airbase';
+  // Low-defence hexes only (strikes always land, so any plane HP loss is flak):
+  // a farmland target with a farmland neighbour, both in range, to host the SAM.
+  const inRange = c => hexDistance(base, c) > 1 && hexDistance(base, c) <= AIR_RANGE;
+  const hostsSam = c => neighbors(game.cells, c).some(n =>
+    n.terrain === 'farmland' && n !== base && inRange(n));
+  const target = land.find(c => c.terrain === 'farmland' && inRange(c) && hostsSam(c));
+  if (target) {
+    const samCell = neighbors(game.cells, target).find(n =>
+      n.terrain === 'farmland' && n !== base && inRange(n));
+    samCell.owner = 2; samCell.units = [makeUnit('sam', 2)]; // bystander power's SAM
+    target.owner = 1; target.fort = false; target.upgrade = null;
+    const plane = makeUnit('aircraft', 0);
+    base.units.push(plane);
+    for (let i = 0; i < 40 && base.units.includes(plane); i++) {
+      if (!target.units.some(u => u.owner === 1)) target.units.push(makeUnit('basic', 1));
+      plane.actions = UNITS.aircraft.actions;
+      airStrike(game, base, target, 0);
+    }
+    check(base.units.includes(plane) && plane.hp === UNITS.aircraft.hp,
+      "a bystander's SAM must not engage planes striking a hex it has no stake in");
+
+    // But strike the SAM's own hex and it defends itself.
+    samCell.fort = false; samCell.upgrade = null;
+    let hurt = false;
+    for (let i = 0; i < 40 && !hurt; i++) {
+      if (!samCell.units.length) samCell.units = [makeUnit('sam', 2)];
+      plane.hp = UNITS.aircraft.hp;
+      plane.actions = UNITS.aircraft.actions;
+      if (!base.units.includes(plane)) base.units.push(plane);
+      airStrike(game, base, samCell, 0);
+      hurt = plane.hp < UNITS.aircraft.hp || !base.units.includes(plane);
+    }
+    check(hurt, 'a SAM defends its own hex when struck');
+  }
+}
+
 // --- Mechanics: carrier as mobile air base ---
 {
   const game = createGame(8);
