@@ -51,7 +51,15 @@ function traitsOf(game, p) {
 }
 
 function armyCapOf(game, p, nCells) {
-  return Math.floor((15 + nCells / 3) * traitsOf(game, p).horde);
+  // Base cap keeps armies proportional to the empire so fronts don't saturate
+  // into permanent gridlock. But a power that has out-produced its cap and is
+  // now sitting on an idle war chest should be allowed to convert that hoard
+  // into an overwhelming force — otherwise late games freeze with the winner
+  // unable to spend thousands of gold, and razed buildings rebuild faster than
+  // a size-locked army can grind them down. Excess treasury lifts the ceiling.
+  const base = (15 + nCells / 3) * traitsOf(game, p).horde;
+  const hoard = Math.max(0, game.players[p].money - 300);
+  return Math.floor(base + hoard / 60);
 }
 
 // The single enemy production building the whole war effort converges on. One
@@ -63,6 +71,18 @@ function armyCapOf(game, p, nCells) {
 function objectiveField(game, p) {
   const fromMine = landDistanceField(game, c => c.owner === p);
   const T = traitsOf(game, p);
+  // Count each rival's remaining production buildings: the enemy nearest to
+  // elimination is worth ganging up on, because finishing a whole power off
+  // (not just razing a building it rebuilds) is what actually ends the game and
+  // hands you its land and army. Bias the objective toward the last few
+  // buildings of an already-crumbling rival rather than picking at a giant.
+  const rivalBuildings = new Map();
+  for (const c of game.cells.values()) {
+    if (c.owner !== null && c.owner !== p && game.players[c.owner].alive &&
+        MILITARY_BUILDINGS.includes(c.upgrade)) {
+      rivalBuildings.set(c.owner, (rivalBuildings.get(c.owner) ?? 0) + 1);
+    }
+  }
   let objective = null, bs = Infinity;
   for (const c of game.cells.values()) {
     if (c.owner === null || c.owner === p || !game.players[c.owner].alive) continue;
@@ -70,7 +90,11 @@ function objectiveField(game, p) {
     const d = fromMine.get(key(c.q, c.r)) ?? Infinity;
     // flank low: straight at the nearest building, walls be damned.
     // flank high: swing wide for whatever is weakly held.
-    const score = d + T.flank * (2 * defenseOf(game, c, p) + enemyUnits(c, p).length);
+    // The final term pulls the whole war effort toward whichever rival has the
+    // fewest buildings left — concentrate the kill instead of smearing damage
+    // across every front, so someone actually falls.
+    const score = d + T.flank * (2 * defenseOf(game, c, p) + enemyUnits(c, p).length)
+      + 3 * (rivalBuildings.get(c.owner) ?? 0);
     if (score < bs) { bs = score; objective = c; }
   }
   return objective && landDistanceField(game, c => c === objective);
@@ -134,6 +158,24 @@ function* aiBuild(game, p, distEnemy) {
       if (recruit(game, ab, 'aircraft', p)) break;
       yield 'recruit';
     }
+  }
+
+  // Forward airbase: an empire's air power fossilises in the rear as the front
+  // advances past it — old bases end up out of range of every enemy while the
+  // whole air force sits idle in the deep interior. That's exactly when air is
+  // needed most: deep strikes are how a besieger cracks a saturated trench line
+  // that ground attrition alone can't. If we own planes but not one can reach a
+  // single enemy, plant a base right behind the front so the air force re-engages.
+  const myPlanes = [...game.cells.values()].flatMap(c => aircraftAt(c, p));
+  const anyInRange = myPlanes.length && [...game.cells.values()].some(c =>
+    (c.upgrade === 'airbase' || c.units.some(u => u.owner === p && u.type === 'carrier')) &&
+    c.owner === p &&
+    [...game.cells.values()].some(e => enemyUnits(e, p).length && hexDistance(c, e) <= AIR_RANGE));
+  if (myPlanes.length && !anyInRange && pl.money >= 40 + reserve) {
+    const fwd = mine
+      .filter(c => !c.upgrade && (distEnemy.get(key(c.q, c.r)) ?? 99) >= 2)
+      .sort((a, b) => (distEnemy.get(key(a.q, a.r)) ?? 99) - (distEnemy.get(key(b.q, b.r)) ?? 99))[0];
+    if (fwd && !build(game, fwd, 'airbase', p)) yield 'build';
   }
 
   // Air defense: once a rival visibly flies planes (airbase on the map, planes
@@ -403,7 +445,7 @@ function* aiNaval(game, p) {
   }
 }
 
-function* aiMoveAttack(game, p, distTarget, distThreat) {
+function* aiMoveAttack(game, p, distTarget, distThreat, dominant) {
   const T = traitsOf(game, p);
   const stacks = [...game.cells.values()]
     .filter(c => domainOf(c) === 'land' && ownUnits(c, p).some(u => u.actions > 0 && UNITS[u.type].domain === 'land'));
@@ -414,7 +456,7 @@ function* aiMoveAttack(game, p, distTarget, distThreat) {
       const movers = ownUnits(cell, p).filter(u => u.actions > 0 && UNITS[u.type].domain === 'land');
       if (!movers.length) break;
 
-      // Attack an adjacent defended hex if the odds are tolerable. Production
+      // Attack an adjacent defended hex only when the exchange pays. Production
       // buildings come first: capturing or razing them is what ends the war.
       const targets = neighbors(game.cells, cell)
         .filter(n => n.terrain !== 'sea' && blockingUnits(n, p).length)
@@ -423,19 +465,42 @@ function* aiMoveAttack(game, p, distTarget, distThreat) {
           defenseOf(game, a, p) - defenseOf(game, b, p));
       if (targets.length) {
         const t = targets[0];
-        const bestAtk = Math.max(...movers.map(u => UNITS[u.type].atk));
-        const chance = Math.max(0, 6 + bestAtk - defenseOf(game, t, p)) / 6;
-        const outnumber = movers.length >= 2 * enemyUnits(t, p).length;
-        // A production building is worth pressing at any odds (a mech hit razes
-        // it outright); grow bolder as the game drags on, so sieges break
-        // instead of stalling into a frozen front. Temperament sets the bar:
-        // a warlord attacks at odds a turtle would never take.
+        const defTotal = defenseOf(game, t, p);
+        // Per-attacker hit chance using each unit's OWN atk. The old code used
+        // the stack's best atk, so a mixed 1-mech + 6-infantry stack was scored
+        // as if every swing were atk 3 — grossly overstating the odds and
+        // sending infantry to die in assaults only the mech could make.
+        const pHitOf = u => Math.max(0, Math.min(1, (6 + UNITS[u.type].atk - defTotal) / 6));
+        // Expected value of this stack's assault. Each failed swing costs the
+        // attacker a permanent hp (units never heal — startTurn only refreshes
+        // actions), so the gold bled is summed per unit at its cost-per-hp. The
+        // prize is the defender gold destroyed plus, for a production building,
+        // its own value — razing or capturing it is how wars end.
+        const defenders = blockingUnits(t, p);
+        let expectedHits = 0, expectedLoss = 0, prize = 0;
+        for (const u of movers.filter(u => UNITS[u.type].atk > 0)) {
+          const ph = pHitOf(u);
+          expectedHits += ph;
+          expectedLoss += (1 - ph) * UNITS[u.type].cost / UNITS[u.type].hp;
+        }
+        for (const u of defenders) prize += UNITS[u.type].cost;
         const valuable = MILITARY_BUILDINGS.includes(t.upgrade);
-        const desperate = game.turn > 30 / T.aggression && chance > 0 &&
-          movers.length >= enemyUnits(t, p).length;
-        if (chance >= 0.34 / T.aggression ||
-            ((outnumber || valuable || game.turn > 50 / T.aggression) && chance > 0) ||
-            desperate) {
+        if (valuable) prize += UPGRADES[t.upgrade].cost + 20;
+        // Attack when the gold lost to repulses stays within a temperamental
+        // budget of the prize. A warlord's budget is looser; everyone grows
+        // bolder late so sieges break instead of stalling into a frozen front.
+        // This is what stops the suicide charges: into a fort, low pHit means
+        // high expectedLoss, which exceeds a small prize — so the stack holds
+        // and masses instead of feeding itself to the wall one hp at a time.
+        const late = game.turn > 50 / T.aggression;
+        const budget = T.aggression * (valuable ? 2 : 1) * (late ? 1.5 : 1);
+        // A production building is worth pressing even at a stretched budget —
+        // a mech hit razes it outright, and razing it is how wars end — but
+        // never without some expected return, so the AI doesn't pour its whole
+        // army into an unwinnable wall.
+        const siegePress = valuable && expectedHits > 0 &&
+          expectedLoss <= prize * T.aggression * 3;
+        if (expectedHits > 0 && (expectedLoss <= prize * budget || siegePress)) {
           const res = attackHex(game, cell, t, p);
           if (res.error) break;
           yield 'attack';
@@ -448,14 +513,18 @@ function* aiMoveAttack(game, p, distTarget, distThreat) {
           }
           continue;
         }
-        break; // hold position rather than suicide
+        break; // can't crack it profitably — hold and mass rather than feed it hp
       }
 
       // Garrison: a small stack on one of our production buildings stands its
       // ground while enemy troops are close — losing every building is losing
       // the game, and recruits spawning here keep the post manned. A full field
       // army marches regardless; parking it would freeze the whole offensive.
-      if (cell.owner === p && MILITARY_BUILDINGS.includes(cell.upgrade) &&
+      // A power with overwhelming numbers doesn't need to sit on its rear
+      // buildings — it can afford to lose a hex it will retake, and every unit
+      // held back is one not stretching the enemy line. Keep the garrison only
+      // when the war is close enough that losing a building actually matters.
+      if (!dominant && cell.owner === p && MILITARY_BUILDINGS.includes(cell.upgrade) &&
           movers.length <= 3 && (distThreat.get(key(cell.q, cell.r)) ?? 99) <= 4) {
         break;
       }
@@ -484,7 +553,24 @@ export function* aiTurnGen(game, p) {
   // Early on, expand into anything unowned; once the map is carved up, converge
   // the whole army on one enemy production building at a time — the objective
   // that actually ends the war — instead of smearing along the entire front.
-  const march = (game.turn > 25 ? objectiveField(game, p) : null)
+  //
+  // The exception is overwhelming superiority. Funnelling a giant army through a
+  // single chokepoint wastes it: only nine units fit a hex, so the rear gridlocks
+  // behind its own front and a dug-in turtle holds one axis forever. A power that
+  // badly outnumbers every rival should instead lean on that mass — press the
+  // whole enemy perimeter at once so the defender can't garrison it all, and the
+  // line cracks somewhere. Below dominance, concentration still beats smearing.
+  const myLand = [...game.cells.values()]
+    .reduce((s, c) => s + c.units.filter(u => u.owner === p && UNITS[u.type].domain === 'land').length, 0);
+  let rivalLand = 0;
+  for (let q = 0; q < game.players.length; q++) {
+    if (q === p || !game.players[q].alive) continue;
+    const n = [...game.cells.values()]
+      .reduce((s, c) => s + c.units.filter(u => u.owner === q && UNITS[u.type].domain === 'land').length, 0);
+    if (n > rivalLand) rivalLand = n;
+  }
+  const dominant = myLand >= Math.max(20, 1.8 * rivalLand);
+  const march = (game.turn > 25 && !dominant ? objectiveField(game, p) : null)
     ?? landDistanceField(game, c => c.owner !== p);
   // Threat field for garrisons: distance to enemy *troops*, not enemy-coloured
   // land — a border post with no army in sight has nothing to garrison against.
@@ -494,7 +580,7 @@ export function* aiTurnGen(game, p) {
   yield* aiBuild(game, p, distEnemy);
   yield* aiAir(game, p);
   yield* aiNaval(game, p);
-  yield* aiMoveAttack(game, p, march, distThreat);
+  yield* aiMoveAttack(game, p, march, distThreat, dominant);
 }
 
 export function aiTurn(game, p) {

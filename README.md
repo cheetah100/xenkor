@@ -1,9 +1,9 @@
 # Xenkor
 
 A turn-based hex strategy game in the browser — you against four NPC powers.
-The full rules are in [xenkor-spec.md](xenkor-spec.md), which is authoritative
-and kept in sync with the code. The notes below highlight a few rules worth
-knowing up front.
+[xenkor-spec.md](xenkor-spec.md) is the original starting-point design doc and
+is historical — the code is the source of truth where they differ. The notes
+below highlight a few rules worth knowing up front.
 
 ## Run
 
